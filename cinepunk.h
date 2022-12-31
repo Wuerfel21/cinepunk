@@ -16,11 +16,13 @@ enum CPColorType {
     CP_YUVBLOCK
 };
 
+
+// The layout of this struct is optimized for SIMD, do not touch.
 typedef struct {
     uint8_t weight;
     uint8_t _pad;
-    uint8_t ytl,ytr,ybl,ybr;
     uint8_t u,v; // With +128 bias
+    uint8_t ytl,ytr,ybl,ybr;
 } CPYuvBlock;
 
 struct CPEncoderState;

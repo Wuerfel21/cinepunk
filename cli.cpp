@@ -62,12 +62,12 @@ int main(int argc, char **argv) {
     CP_destroy_decoder(decoder);
 
 
-    test_still("test/akared");
-    test_still("test/psycred");
-    test_still("test/kokoro");
-    test_still("test/alice");
+    //test_still("test/akared");
+    //test_still("test/psycred");
+    //test_still("test/kokoro");
+    //test_still("test/alice");
     test_still("test/fufu");
-    test_still("test/junko");
-    test_still("test/pigge");
+    //test_still("test/junko");
+    //test_still("test/pigge");
 }
 

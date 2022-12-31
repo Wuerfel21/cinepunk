@@ -1,6 +1,15 @@
 #pragma once
 #include "../cinepunk.h"
 
+#if defined(__amd64__) or defined(__i386__)
+#define CINEPUNK_AVX2
+#endif
+
+#ifdef CINEPUNK_AVX2
+#include <immintrin.h>
+#endif
+
+
 typedef unsigned uint;
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -178,10 +187,10 @@ struct CPEncoderState {
 
 
     // In vq_dummy.cpp
-    u64 vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,const std::vector<uint> &applicable_indices,std::vector<u8> &closest_out);
+    u64 vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> &closest_out);
 
     // In vq_elbg.cpp
-    u64 vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,const std::vector<uint> &applicable_indices,std::vector<u8> &closest_out);
+    u64 vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> &closest_out);
 
 };
 
@@ -212,14 +221,55 @@ inline u32 square(int x) {
     return x*x;
 }
 
-inline u32 blockDistortion(CPYuvBlock a,const CPYuvBlock b) {
+constexpr uint U_WEIGHT = 2;
+constexpr uint V_WEIGHT = 3;
+
+inline u32 blockDistortion(CPYuvBlock a,CPYuvBlock b) {
     return square(a.ytl-b.ytl)
          + square(a.ytr-b.ytr)
          + square(a.ybl-b.ybl)
          + square(a.ybr-b.ybr)
-         + square(a.u - b.u) * 2
-         + square(a.v - b.v) * 3;
+         + square(a.u - b.u) * U_WEIGHT
+         + square(a.v - b.v) * V_WEIGHT;
 }
+
+#ifdef CINEPUNK_AVX2
+
+inline u64 block_packed(CPYuvBlock a) {
+    union {
+        CPYuvBlock blk;
+        uint64_t vec;
+    } lmao;
+    lmao.blk = a;
+    return lmao.vec;
+}
+inline CPYuvBlock block_unpacked(u64 a) {
+    union {
+        CPYuvBlock blk;
+        uint64_t vec;
+    } lmao;
+    lmao.vec = a;
+    return lmao.blk;
+}
+
+/* Actually slower than scalar version when used as-is
+inline u32 blockDistortion_AVX2(CPYuvBlock a,CPYuvBlock b) {
+
+    auto avec = _mm256_cvtepu8_epi32(_mm_set_epi64x(0,block_packed(a)));
+    auto bvec = _mm256_cvtepu8_epi32(_mm_set_epi64x(0,block_packed(b)));
+
+    avec = _mm256_sub_epi32(avec,bvec);
+    avec = _mm256_mullo_epi32(avec,avec);
+    avec = _mm256_mullo_epi32(avec,_mm256_set_epi32(1,1,1,1,V_WEIGHT,U_WEIGHT,0,0));
+    auto upper = _mm256_extractf128_si256(avec,1);
+    auto lower = _mm256_extractf128_si256(avec,0);
+    auto sum = _mm_hadd_epi32(lower,upper);
+    // Okay we now have {1+0,3+2,5+4,7+6}
+    sum = _mm_hadd_epi32(sum,sum);
+    sum = _mm_hadd_epi32(sum,sum);
+    return _mm_extract_epi32(sum,0);
+}*/
+#endif
 
 
 inline constexpr u8 clamp_u8(int x) {

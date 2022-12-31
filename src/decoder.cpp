@@ -105,16 +105,16 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
                                 // V1 code
                                 auto code = dec->codes_v1[stripno][bitstream.read_u8()];
                                 dec->frame[dec->blk_index(x*2+0,y*2+0)] = {
-                                    .ytl = code.ytl,.ytr = code.ytl,.ybl = code.ytl,.ybr = code.ytl,.u = code.u,.v = code.v
+                                    .u = code.u,.v = code.v,.ytl = code.ytl,.ytr = code.ytl,.ybl = code.ytl,.ybr = code.ytl
                                 };
                                 dec->frame[dec->blk_index(x*2+1,y*2+0)] = {
-                                    .ytl = code.ytr,.ytr = code.ytr,.ybl = code.ytr,.ybr = code.ytr,.u = code.u,.v = code.v
+                                    .u = code.u,.v = code.v,.ytl = code.ytr,.ytr = code.ytr,.ybl = code.ytr,.ybr = code.ytr,
                                 };
                                 dec->frame[dec->blk_index(x*2+0,y*2+1)] = {
-                                    .ytl = code.ybl,.ytr = code.ybl,.ybl = code.ybl,.ybr = code.ybl,.u = code.u,.v = code.v
+                                    .u = code.u,.v = code.v,.ytl = code.ybl,.ytr = code.ybl,.ybl = code.ybl,.ybr = code.ybl,
                                 };
                                 dec->frame[dec->blk_index(x*2+1,y*2+1)] = {
-                                    .ytl = code.ybr,.ytr = code.ybr,.ybl = code.ybr,.ybr = code.ybr,.u = code.u,.v = code.v
+                                    .u = code.u,.v = code.v,.ytl = code.ybr,.ytr = code.ybr,.ybl = code.ybr,.ybr = code.ybr,
                                 };
                             } else {
                                 // V4 codes
