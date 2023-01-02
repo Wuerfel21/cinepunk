@@ -169,26 +169,41 @@ CP_API void CP_yuv_downscale_fast(CPYuvBlock *dst, const CPYuvBlock* src, unsign
 
     for (uint row=0;row<blockHeight;row++) {
         for (uint column=0;column<blockWidth;column++) {
-            uint u = 0, v = 0;
+            uint u = 0, v = 0, weight = 0;
             auto srcblk = src+(column+row*blockWidth*2)*2;
+            auto tl = *srcblk;
             u += srcblk->u;
             v += srcblk->v;
+            weight += srcblk->weight;
             dst->ytl = (srcblk->ytl + srcblk->ytr + srcblk->ybl + srcblk->ybr + 2)>>2;
             srcblk++;
+            auto tr = *srcblk;
             u += srcblk->u;
             v += srcblk->v;
+            weight += srcblk->weight;
             dst->ytr = (srcblk->ytl + srcblk->ytr + srcblk->ybl + srcblk->ybr + 2)>>2;
             srcblk += blockWidth*2 - 1;
+            auto bl = *srcblk;
             u += srcblk->u;
             v += srcblk->v;
+            weight += srcblk->weight;
             dst->ybl = (srcblk->ytl + srcblk->ytr + srcblk->ybl + srcblk->ybr + 2)>>2;
             srcblk++;
+            auto br = *srcblk;
             u += srcblk->u;
             v += srcblk->v;
+            weight += srcblk->weight;
             dst->ybr = (srcblk->ytl + srcblk->ytr + srcblk->ybl + srcblk->ybr + 2)>>2;
 
             dst->u = (u+2)>>2;
             dst->v = (v+2)>>2;
+
+            // weighting hack: de-weight poor-performing blocks
+            // TODO: tune magic number
+            auto mbdist = macroblockV1Distortion(tl,tr,bl,br,*dst);
+            if (mbdist < 48*TOTAL_WEIGHT) weight*=2;
+            if (mbdist < 6*TOTAL_WEIGHT) weight*=2;
+            dst->weight = clamp_u8(weight);
             dst++;
         }
     }

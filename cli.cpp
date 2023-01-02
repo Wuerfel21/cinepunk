@@ -46,6 +46,11 @@ void test_still(std::string basename) {
     CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
     CP_destroy_decoder(decoder);
     lodepng::encode(basename+"_bad.cinep.png",out_buffer,width,height,LCT_RGB);
+    decoder = CP_create_decoder(width,height);
+    CP_set_decoder_debug(decoder,CP_DECDEBUG_CRYPTOMATTE);
+    CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
+    CP_destroy_decoder(decoder);
+    lodepng::encode(basename+"_bad_cryptomatte.cinep.png",out_buffer,width,height,LCT_RGB);
     
 
 }
@@ -65,9 +70,9 @@ int main(int argc, char **argv) {
     //test_still("test/akared");
     //test_still("test/psycred");
     //test_still("test/kokoro");
-    //test_still("test/alice");
+    test_still("test/alice");
     test_still("test/fufu");
-    //test_still("test/junko");
-    //test_still("test/pigge");
+    test_still("test/junko");
+    test_still("test/pigge");
 }
 

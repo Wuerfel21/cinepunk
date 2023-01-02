@@ -30,6 +30,8 @@ struct CPDecoderState;
 
 #define CP_ENCFLAG_RGB2YUV_FAST (1U<<0) // Use fast RGB->YUV conversion instead of high-quality
 
+#define CP_DECDEBUG_CRYPTOMATTE (1U<<0)
+
 // maximum size of an encoded frame packet
 #define CP_BUFFER_SIZE(width,height,strips) (10+((width)*(height))/4+((width)*(height)+63)/64+(strips)*(12+4*3+1536*2))
 
@@ -52,6 +54,7 @@ extern size_t CP_pull_frame(CPEncoderState *enc,uint8_t *buffer);
 // From decoder.cpp
 extern CPDecoderState *CP_create_decoder(unsigned frame_width, unsigned frame_height);
 extern void CP_destroy_decoder(CPDecoderState *dec);
+extern void CP_set_decoder_debug(CPDecoderState *dec,uint32_t flags);
 extern void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_size,CPColorType ctype,void *frameOut);
 
 

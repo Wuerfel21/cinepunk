@@ -1,4 +1,5 @@
 #include "cinepunk_internal.hpp"
+#include <cstdio>
 
 CPEncoderState::CPEncoderState(unsigned frame_width, unsigned frame_height, unsigned max_strips)
 : frame_mbWidth{frame_width/4},frame_mbHeight{frame_height/4},max_strips{max_strips} {
@@ -8,9 +9,10 @@ CPEncoderState::CPEncoderState(unsigned frame_width, unsigned frame_height, unsi
 
     encoder_flags = 0;
     frame_count = 0;
-    next_frame = std::make_unique<CPYuvBlock[]>(frame_width*frame_height/4);
-    cur_frame  = std::make_unique<CPYuvBlock[]>(frame_width*frame_height/4);
-    prev_frame = std::make_unique<CPYuvBlock[]>(frame_width*frame_height/4);
+    next_frame = std::make_unique<CPYuvBlock[]>(total_blocks());
+    cur_frame  = std::make_unique<CPYuvBlock[]>(total_blocks());
+    prev_frame = std::make_unique<CPYuvBlock[]>(total_blocks());
+    cur_frame_v1 = std::make_unique<CPYuvBlock[]>(total_macroblocks());
     prev_codes_v4.resize(max_strips);
     prev_codes_v1.resize(max_strips);
 }
@@ -84,14 +86,13 @@ void CPEncoderState::doFrame(PacketWriter &packet) {
 
     // Assign block weights based on change in lookahead frame
     for(uint i=0;i<total_blocks();i++) {
-        uint distortion = blockDistortion(cur_frame[i],next_frame[i]);
+        //uint distortion = blockDistortion(cur_frame[i],next_frame[i]);
         // TODO: Tune threshold
-        cur_frame[i].weight = (distortion < 16) ? 3 : 2;
+        cur_frame[i].weight = 3;//(distortion < 16) ? 3 : 2;
     }
 
     // Create low-res copy of frame for V1 encoding
-    std::unique_ptr<CPYuvBlock[]> v1_frame(new CPYuvBlock[total_macroblocks()]);
-    CP_yuv_downscale_fast(v1_frame.get(),cur_frame.get(),frame_mbWidth,frame_mbHeight);
+    CP_yuv_downscale_fast(cur_frame_v1.get(),cur_frame.get(),frame_mbWidth,frame_mbHeight);
 
     auto strip = tryStrip(0,frame_mbHeight,keyframe);
     writeStrip(packet,strip);
@@ -111,18 +112,80 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
     CPEncoderState::StripEncoding strip(frame_mbWidth*height);
     strip.ytop = ytop;
     strip.height = height;
-    // Shit algorithm
-    strip.strip_type = CPEncoderState::StripEncoding::MB_V4;
-    std::vector<uint> all_blk;
+
+    std::vector<uint> v4_idx,v1_idx;
+    strip.strip_type = CPEncoderState::StripEncoding::MB_V4; // TODO select dynamic
     for (uint i=0;i<total_macroblocks();i++) {
         strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V4;
-        all_blk.push_back(i*4+0);
-        all_blk.push_back(i*4+1);
-        all_blk.push_back(i*4+2);
-        all_blk.push_back(i*4+3);
+        v1_idx.push_back(i);
+        v4_idx.push_back(i*4+0);
+        v4_idx.push_back(i*4+1);
+        v4_idx.push_back(i*4+2);
+        v4_idx.push_back(i*4+3);
     }
-    vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),all_blk,strip.blk_v4);
+    vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,strip.blk_v4);
+    vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,strip.mb_v1);
 
+    v4_idx.clear();
+    v1_idx.clear();
+    for (uint y=0;y<frame_mbHeight;y++) {
+        for (uint x=0;x<frame_mbWidth;x++) {
+            u32 v1_distortion = macroblockV1Distortion(
+                cur_frame[blk_index(x*2+0,y*2+0)],
+                cur_frame[blk_index(x*2+1,y*2+0)],
+                cur_frame[blk_index(x*2+0,y*2+1)],
+                cur_frame[blk_index(x*2+1,y*2+1)],
+                strip.code_v1[strip.mb_v1[mb_index(x,y)]]);
+            u32 v4_distortion = blockDistortion(cur_frame[blk_index(x*2+0,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+0)]])
+                              + blockDistortion(cur_frame[blk_index(x*2+1,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+0)]])
+                              + blockDistortion(cur_frame[blk_index(x*2+0,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+1)]])
+                              + blockDistortion(cur_frame[blk_index(x*2+1,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+1)]]);
+            if (v1_distortion <= v4_distortion) {
+                strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V1;
+                v1_idx.push_back(mb_index(x,y));
+            } else {
+                strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V4;
+                v4_idx.push_back(blk_index(x*2+0,y*2+0));
+                v4_idx.push_back(blk_index(x*2+1,y*2+0));
+                v4_idx.push_back(blk_index(x*2+0,y*2+1));
+                v4_idx.push_back(blk_index(x*2+1,y*2+1));
+            }
+        }
+    }
+    printf("V1: %u, V4 : %u\n",uint(v1_idx.size()),uint(v4_idx.size()/4));
+    if (v4_idx.empty()) {
+        strip.code_v4.clear();
+    } else {
+        vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,strip.blk_v4);
+    }
+    if (v1_idx.empty()) {
+        strip.code_v1.clear();
+    } else {
+        vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,strip.mb_v1);
+    }
+
+    #if 1
+        uint histogram[256] = {};
+        u64 distortion_total[256] = {};
+        for (uint i=0;i<total_blocks();i++) {
+            auto code = strip.blk_v4[i];
+            histogram[code]++;
+            distortion_total[code] += blockDistortion(cur_frame[i],strip.code_v4[code]);
+        }
+        printf("usage: ");
+        for (uint i=0;i<256;i++) printf("%u,",histogram[i]);
+        printf("\n");
+        printf("distortion: ");
+        for (uint i=0;i<256;i++) printf("%llu,",distortion_total[i]);
+        printf("\n");
+        for(uint i=0;i<strip.code_v4.size();i++) {
+            if (histogram[i]== 0) printf("dead code %3u\n",i);
+        }
+
+    #endif
+
+
+    
     return strip;
 }
 

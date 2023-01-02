@@ -1,7 +1,7 @@
 #pragma once
 #include "../cinepunk.h"
 
-#if defined(__amd64__) or defined(__i386__)
+#if (defined(__amd64__) or defined(__i386__)) and not defined(CINEPUNK_NOVECTOR)
 #define CINEPUNK_AVX2
 #endif
 
@@ -20,6 +20,7 @@ typedef uint64_t u64;
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <cstring>
 #include <cassert>
 
@@ -127,6 +128,7 @@ struct BitstreamReader {
 
 struct CPDecoderState {
     const uint frame_mbWidth,frame_mbHeight;
+    uint32_t debug_flags = 0;
     std::unique_ptr<CPYuvBlock[]> frame;
     std::vector<std::array<CPYuvBlock,256>> codes_v4;
     std::vector<std::array<CPYuvBlock,256>> codes_v1;
@@ -145,6 +147,7 @@ struct CPEncoderState {
     uint32_t encoder_flags;
     std::unique_ptr<CPYuvBlock[]> prev_frame;
     std::unique_ptr<CPYuvBlock[]> cur_frame;
+    std::unique_ptr<CPYuvBlock[]> cur_frame_v1;
     std::unique_ptr<CPYuvBlock[]> next_frame;
     std::vector<std::array<CPYuvBlock,256>> prev_codes_v4;
     std::vector<std::array<CPYuvBlock,256>> prev_codes_v1;
@@ -221,16 +224,30 @@ inline u32 square(int x) {
     return x*x;
 }
 
-constexpr uint U_WEIGHT = 2;
-constexpr uint V_WEIGHT = 3;
+constexpr uint Y_WEIGHT =   1;
+constexpr uint U_WEIGHT =   2;
+constexpr uint V_WEIGHT =   2;
+constexpr uint TOTAL_WEIGHT = Y_WEIGHT*4 + U_WEIGHT + V_WEIGHT;
 
 inline u32 blockDistortion(CPYuvBlock a,CPYuvBlock b) {
-    return square(a.ytl-b.ytl)
-         + square(a.ytr-b.ytr)
-         + square(a.ybl-b.ybl)
-         + square(a.ybr-b.ybr)
+    u32 y_dist = square(a.ytl-b.ytl) + square(a.ytr-b.ytr) + square(a.ybl-b.ybl) + square(a.ybr-b.ybr);
+    return y_dist * Y_WEIGHT
          + square(a.u - b.u) * U_WEIGHT
          + square(a.v - b.v) * V_WEIGHT;
+}
+
+inline macroblockV1Distortion_sub(CPYuvBlock a, u8 y, u8 u, u8 v) {
+    u32 y_dist = square(a.ytl - y) + square(a.ytr - y) + square(a.ybl - y) + square(a.ybr - y);
+    return y_dist * Y_WEIGHT
+         + square(a.u - u) * U_WEIGHT
+         + square(a.v - v) * V_WEIGHT;
+}
+
+inline u32 macroblockV1Distortion(CPYuvBlock tl,CPYuvBlock tr,CPYuvBlock bl,CPYuvBlock br,CPYuvBlock v1) {
+    return macroblockV1Distortion_sub(tl,v1.ytl,v1.u,v1.v)
+         + macroblockV1Distortion_sub(tr,v1.ytr,v1.u,v1.v)
+         + macroblockV1Distortion_sub(bl,v1.ybl,v1.u,v1.v)
+         + macroblockV1Distortion_sub(br,v1.ybr,v1.u,v1.v);
 }
 
 #ifdef CINEPUNK_AVX2
