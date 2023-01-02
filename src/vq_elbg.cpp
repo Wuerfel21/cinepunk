@@ -120,6 +120,22 @@ static u64 __attribute__((noinline,target("avx2"))) voronoi_partition_AVX2(
             diff54 = _mm256_mullo_epi16(diff54,diff54);
             diff76 = _mm256_mullo_epi16(diff76,diff76);
 
+            #if 1
+            assert(Y_WEIGHT == 1 && U_WEIGHT == 2 && V_WEIGHT == 2);
+            // Duplicate UV into unused slots
+            diff10 = _mm256_shuffle_epi32(diff10,0b11'10'01'01);
+            diff32 = _mm256_shuffle_epi32(diff32,0b11'10'01'01);
+            diff54 = _mm256_shuffle_epi32(diff54,0b11'10'01'01);
+            diff76 = _mm256_shuffle_epi32(diff76,0b11'10'01'01);
+            __m256i diff0 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff10,0));
+            __m256i diff1 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff10,1));
+            __m256i diff2 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff32,0));
+            __m256i diff3 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff32,1));
+            __m256i diff4 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff54,0));
+            __m256i diff5 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff54,1));
+            __m256i diff6 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff76,0));
+            __m256i diff7 = _mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff76,1));
+            #else
             __m256i diff0 = _mm256_mullo_epi32(_mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff10,0)),weights);
             __m256i diff1 = _mm256_mullo_epi32(_mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff10,1)),weights);
             __m256i diff2 = _mm256_mullo_epi32(_mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff32,0)),weights);
@@ -128,6 +144,7 @@ static u64 __attribute__((noinline,target("avx2"))) voronoi_partition_AVX2(
             __m256i diff5 = _mm256_mullo_epi32(_mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff54,1)),weights);
             __m256i diff6 = _mm256_mullo_epi32(_mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff76,0)),weights);
             __m256i diff7 = _mm256_mullo_epi32(_mm256_cvtepu16_epi32(_mm256_extractf128_si256(diff76,1)),weights);
+            #endif
 
             __m256i sum10 = _mm256_hadd_epi32(diff0,diff1);
             __m256i sum32 = _mm256_hadd_epi32(diff2,diff3);

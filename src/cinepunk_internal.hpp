@@ -236,7 +236,7 @@ inline u32 blockDistortion(CPYuvBlock a,CPYuvBlock b) {
          + square(a.v - b.v) * V_WEIGHT;
 }
 
-inline macroblockV1Distortion_sub(CPYuvBlock a, u8 y, u8 u, u8 v) {
+inline u32 macroblockV1Distortion_sub(CPYuvBlock a, u8 y, u8 u, u8 v) {
     u32 y_dist = square(a.ytl - y) + square(a.ytr - y) + square(a.ybl - y) + square(a.ybr - y);
     return y_dist * Y_WEIGHT
          + square(a.u - u) * U_WEIGHT
