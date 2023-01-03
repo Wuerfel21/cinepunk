@@ -29,9 +29,9 @@ void test_still(std::string basename) {
     //CP_yuv2gray(out_buffer.data(),yuv_buffer.data(),width/2,height/2);
     //lodepng::encode(basename+"_hqyuv_gray.png",out_buffer,width,height,LCT_GREY);
 
-    CP_yuv_downscale_fast(yuv_buffer2.data(),yuv_buffer.data(),width/4,height/4);
+    CP_yuv_downscale_fast(yuv_buffer2.data(),yuv_buffer.data(),width/4,height/4,(width/2)&1);
     CP_yuv2rgb(out_buffer.data(),yuv_buffer2.data(),width/4,height/4);
-    lodepng::encode(basename+"_downscale.png",out_buffer,width/2,height/2,LCT_RGB);
+    lodepng::encode(basename+"_downscale.png",out_buffer,width/4*2,height/4*2,LCT_RGB);
 
     std::vector<uint8_t> cinep_buffer(CP_BUFFER_SIZE(width,height,1));
     auto encoder = CP_create_encoder(width,height,1);
@@ -67,9 +67,9 @@ int main(int argc, char **argv) {
     CP_destroy_decoder(decoder);
 
 
-    //test_still("test/akared");
-    //test_still("test/psycred");
-    //test_still("test/kokoro");
+    test_still("test/akared");
+    test_still("test/psycred");
+    test_still("test/kokoro");
     test_still("test/alice");
     test_still("test/fufu");
     test_still("test/junko");

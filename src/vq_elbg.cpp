@@ -1,10 +1,10 @@
 #include "cinepunk_internal.hpp"
 #include <cstdio>
 
-constexpr uint lbg_iterations = 4;
+constexpr uint lbg_iterations = 2;
 constexpr uint split_iterations = 3;
 constexpr uint soca_iterations = 2;
-constexpr uint soca_search_len_lower = 128;
+constexpr uint soca_search_len_lower = 256;
 //constexpr uint soca_search_len_upper = 16;
 constexpr uint soca_sort_len = 32;
 
@@ -204,7 +204,7 @@ static CPYuvBlock __attribute__((noinline,target("avx2"))) calculate_centroid_AV
 #endif
 
 
-static u64 voronoi_partition(const std::vector<CPYuvBlock> &codebook,const CPYuvBlock *data,std::vector<uint> &applicable_indices,
+u64 voronoi_partition(const std::vector<CPYuvBlock> &codebook,const CPYuvBlock *data,std::vector<uint> &applicable_indices,
     u64 *code_distortion, std::vector<std::vector<uint>> &partition
 ) {
     #ifdef CINEPUNK_AVX2
@@ -339,7 +339,7 @@ static bool  __attribute__((noinline)) try_shift(std::vector<CPYuvBlock> &codebo
     return true;
 }
 
-u64 CPEncoderState::vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data, std::vector<uint> &applicable_indices,std::vector<u8> &closest_out) {
+u64 CPEncoderState::vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data, std::vector<uint> &applicable_indices,std::vector<u8> *closest_out) {
 
     assert(target_codebook_size>=1);
     assert(target_codebook_size<=256);
@@ -364,10 +364,10 @@ u64 CPEncoderState::vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebo
         u64 total_distortion = voronoi_partition(codebook,data,applicable_indices,code_distortion,partition);
 
         // ELBG special sauce!
-        if (codebook.size() >= 4 && iteration_left > 0) {
+        if (codebook.size() >= 8 && iteration_left > 0 && 0) {
             u64 mean_distortion = total_distortion/codebook.size();
             u8 distortion_rank[256];
-            u64 shift_max_dist = iteration_left < 2 ? mean_distortion/8 : mean_distortion;
+            u64 shift_max_dist = 0;//iteration_left < 2 ? mean_distortion/8 : mean_distortion;
             std::iota(distortion_rank,distortion_rank+codebook.size(),0);
             std::sort(distortion_rank,distortion_rank+codebook.size(),[&](u8 i, u8 j){
                 return code_distortion[i] < code_distortion[j];
@@ -406,20 +406,20 @@ u64 CPEncoderState::vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebo
                 // TODO: better pertubation vector ?
                 auto code = codebook[split_i];
                 codebook.push_back({
-                    .u   = clamp_u8(code.u   + 1),
-                    .v   = clamp_u8(code.v   + 1),
-                    .ytl = clamp_u8(code.ytl + 1),
-                    .ytr = clamp_u8(code.ytr + 1),
-                    .ybl = clamp_u8(code.ybl + 1),
-                    .ybr = clamp_u8(code.ybr + 1),
+                    .u   = clamp_u8(code.u   + 2),
+                    .v   = clamp_u8(code.v   + 2),
+                    .ytl = clamp_u8(code.ytl + 2),
+                    .ytr = clamp_u8(code.ytr + 2),
+                    .ybl = clamp_u8(code.ybl + 2),
+                    .ybr = clamp_u8(code.ybr + 2),
                 });
                 codebook[split_i] = {
-                    .u   = clamp_u8(code.u   - 1),
-                    .v   = clamp_u8(code.v   - 1),
-                    .ytl = clamp_u8(code.ytl - 1),
-                    .ytr = clamp_u8(code.ytr - 1),
-                    .ybl = clamp_u8(code.ybl - 1),
-                    .ybr = clamp_u8(code.ybr - 1),
+                    .u   = clamp_u8(code.u   - 2),
+                    .v   = clamp_u8(code.v   - 2),
+                    .ytl = clamp_u8(code.ytl - 2),
+                    .ytr = clamp_u8(code.ytr - 2),
+                    .ybl = clamp_u8(code.ybl - 2),
+                    .ybr = clamp_u8(code.ybr - 2),
                 };
                 codebook_grew = true;
             }
@@ -439,9 +439,11 @@ u64 CPEncoderState::vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebo
     // Note: code_distortion isn't cleared because we DGAS
     u64 distortion_total = voronoi_partition(codebook,data,applicable_indices,code_distortion,partition);
     // Fill closest_out from partition data
-    for (uint i=0;i<partition.size();i++) {
-        for (auto idx : partition[i]) {
-            closest_out[idx] = u8(i);
+    if (closest_out) {
+        for (uint i=0;i<partition.size();i++) {
+            for (auto idx : partition[i]) {
+                (*closest_out)[idx] = u8(i);
+            }
         }
     }
     return distortion_total;

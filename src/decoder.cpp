@@ -17,10 +17,21 @@ CP_API void CP_set_decoder_debug(CPDecoderState *dec,uint32_t flags) {
     dec->debug_flags = flags;
 }
 
-static CPYuvBlock bullshit_code(u8 i) {
+static CPYuvBlock bullshit_code_v4(u8 i) {
     return {
-        .u   = clamp_u8(128+16+8 - (((i>>0)&3)*16)),
-        .v   = clamp_u8(128+16+8 - (((i>>2)&3)*16)),
+        .u   = 64,
+        .v   = clamp_u8(128+29 - ((i&15)*4)),
+        .ytl = clamp_u8((i&0xF0)+8),
+        .ytr = clamp_u8((i&0xF0)+8),
+        .ybl = clamp_u8((i&0xF0)+8),
+        .ybr = clamp_u8((i&0xF0)+8),
+    };
+}
+
+static CPYuvBlock bullshit_code_v1(u8 i) {
+    return {
+        .u   = 192,
+        .v   = clamp_u8(128+29 - ((i&15)*4)),
         .ytl = clamp_u8((i&0xF0)+8),
         .ytr = clamp_u8((i&0xF0)+8),
         .ybl = clamp_u8((i&0xF0)+8),
@@ -118,7 +129,9 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
                             // Not skipped
                             if (chunk_type == CHUNK_IMAGE_V1 || !bitstream.read_bit()) {
                                 // V1 code
-                                auto code = dec->codes_v1[stripno][bitstream.read_u8()];
+                                auto code = (dec->debug_flags & CP_DECDEBUG_CRYPTOMATTE)
+                                    ? bullshit_code_v1(bitstream.read_u8())
+                                    : dec->codes_v1[stripno][bitstream.read_u8()];
                                 dec->frame[dec->blk_index(x*2+0,y*2+0)] = {
                                     .u = code.u,.v = code.v,.ytl = code.ytl,.ytr = code.ytl,.ybl = code.ytl,.ybr = code.ytl
                                 };
@@ -135,10 +148,10 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
                                 
                                 // V4 codes
                                 if (dec->debug_flags & CP_DECDEBUG_CRYPTOMATTE) {
-                                    dec->frame[dec->blk_index(x*2+0,y*2+0)] = bullshit_code(bitstream.read_u8());
-                                    dec->frame[dec->blk_index(x*2+1,y*2+0)] = bullshit_code(bitstream.read_u8());
-                                    dec->frame[dec->blk_index(x*2+0,y*2+1)] = bullshit_code(bitstream.read_u8());
-                                    dec->frame[dec->blk_index(x*2+1,y*2+1)] = bullshit_code(bitstream.read_u8());
+                                    dec->frame[dec->blk_index(x*2+0,y*2+0)] = bullshit_code_v4(bitstream.read_u8());
+                                    dec->frame[dec->blk_index(x*2+1,y*2+0)] = bullshit_code_v4(bitstream.read_u8());
+                                    dec->frame[dec->blk_index(x*2+0,y*2+1)] = bullshit_code_v4(bitstream.read_u8());
+                                    dec->frame[dec->blk_index(x*2+1,y*2+1)] = bullshit_code_v4(bitstream.read_u8());
                                 } else {
                                     dec->frame[dec->blk_index(x*2+0,y*2+0)] = dec->codes_v4[stripno][bitstream.read_u8()];
                                     dec->frame[dec->blk_index(x*2+1,y*2+0)] = dec->codes_v4[stripno][bitstream.read_u8()];

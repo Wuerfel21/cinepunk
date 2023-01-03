@@ -1,7 +1,7 @@
 #include "cinepunk_internal.hpp"
 
 // Dummy VQ algorithm. Just generates a codebook of grayscale blocks...
-u64 CPEncoderState::vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> &closest_out) {
+u64 CPEncoderState::vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> *closest_out) {
 
     assert(target_codebook_size>=2);
     codebook.clear();
@@ -15,7 +15,7 @@ u64 CPEncoderState::vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codeb
     for(uint i:applicable_indices) {
         u8 y = (data[i].ytl+data[i].ytr+data[i].ybl+data[i].ybr+2)>>2;
         u8 code = (y*(target_codebook_size-1)+128)/255;
-        closest_out[i] = code;
+        if (closest_out) (*closest_out)[i] = code;
         distortion += blockDistortion(data[i],codebook[code]);
     }
     return distortion;

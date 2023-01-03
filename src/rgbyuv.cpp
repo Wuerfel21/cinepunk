@@ -163,14 +163,14 @@ CP_API void CP_rgb2yuv_hq(CPYuvBlock *dst, const uint8_t* src, unsigned blockWid
     }
 }
 
-CP_API void CP_yuv_downscale_fast(CPYuvBlock *dst, const CPYuvBlock* src, unsigned blockWidth, unsigned blockHeight) {
+CP_API void CP_yuv_downscale_fast(CPYuvBlock *dst, const CPYuvBlock* src, unsigned blockWidth, unsigned blockHeight, unsigned extra_stride) {
     // Width/height relate to the destination
     // TODO: write HQ version
 
     for (uint row=0;row<blockHeight;row++) {
         for (uint column=0;column<blockWidth;column++) {
             uint u = 0, v = 0, weight = 0;
-            auto srcblk = src+(column+row*blockWidth*2)*2;
+            auto srcblk = src+(column*2+row*(blockWidth*4+extra_stride));
             auto tl = *srcblk;
             u += srcblk->u;
             v += srcblk->v;

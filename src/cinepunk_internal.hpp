@@ -144,14 +144,14 @@ struct CPDecoderState {
 struct CPEncoderState {
 
     const uint frame_mbWidth,frame_mbHeight,max_strips;
-    uint32_t encoder_flags;
+    uint32_t encoder_flags = 0;
     std::unique_ptr<CPYuvBlock[]> prev_frame;
     std::unique_ptr<CPYuvBlock[]> cur_frame;
     std::unique_ptr<CPYuvBlock[]> cur_frame_v1;
     std::unique_ptr<CPYuvBlock[]> next_frame;
     std::vector<std::array<CPYuvBlock,256>> prev_codes_v4;
     std::vector<std::array<CPYuvBlock,256>> prev_codes_v1;
-    uint64_t frame_count;
+    uint64_t frame_count = 0;
     uint inter_frames_left = 0;
     uint frames_pushed = 0;
     
@@ -190,12 +190,19 @@ struct CPEncoderState {
 
 
     // In vq_dummy.cpp
-    u64 vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> &closest_out);
+    u64 vq_dummy(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> *closest_out);
 
     // In vq_elbg.cpp
-    u64 vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> &closest_out);
+    u64 vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> *closest_out);
 
+    // In vq_fastpnn.cpp
+    u64 vq_fastpnn(std::vector<CPYuvBlock> &codebook,uint target_codebook_size,const CPYuvBlock *data,std::vector<uint> &applicable_indices,std::vector<u8> *closest_out);
 };
+
+// In vq_elbg.cpp
+extern u64 voronoi_partition(const std::vector<CPYuvBlock> &codebook,const CPYuvBlock *data,std::vector<uint> &applicable_indices,
+u64 *code_distortion, std::vector<std::vector<uint>> &partition
+);
 
 constexpr u8 CHUNK_FRAME_INTRA = 0x00;
 constexpr u8 CHUNK_FRAME_INTER = 0x01;
@@ -250,8 +257,6 @@ inline u32 macroblockV1Distortion(CPYuvBlock tl,CPYuvBlock tr,CPYuvBlock bl,CPYu
          + macroblockV1Distortion_sub(br,v1.ybr,v1.u,v1.v);
 }
 
-#ifdef CINEPUNK_AVX2
-
 inline u64 block_packed(CPYuvBlock a) {
     union {
         CPYuvBlock blk;
@@ -268,28 +273,19 @@ inline CPYuvBlock block_unpacked(u64 a) {
     lmao.vec = a;
     return lmao.blk;
 }
-
-/* Actually slower than scalar version when used as-is
-inline u32 blockDistortion_AVX2(CPYuvBlock a,CPYuvBlock b) {
-
-    auto avec = _mm256_cvtepu8_epi32(_mm_set_epi64x(0,block_packed(a)));
-    auto bvec = _mm256_cvtepu8_epi32(_mm_set_epi64x(0,block_packed(b)));
-
-    avec = _mm256_sub_epi32(avec,bvec);
-    avec = _mm256_mullo_epi32(avec,avec);
-    avec = _mm256_mullo_epi32(avec,_mm256_set_epi32(1,1,1,1,V_WEIGHT,U_WEIGHT,0,0));
-    auto upper = _mm256_extractf128_si256(avec,1);
-    auto lower = _mm256_extractf128_si256(avec,0);
-    auto sum = _mm_hadd_epi32(lower,upper);
-    // Okay we now have {1+0,3+2,5+4,7+6}
-    sum = _mm_hadd_epi32(sum,sum);
-    sum = _mm_hadd_epi32(sum,sum);
-    return _mm_extract_epi32(sum,0);
-}*/
-#endif
-
+inline u8 block_byte(CPYuvBlock a, uint n) {
+    union {
+        CPYuvBlock blk;
+        uint8_t bytes[8];
+    } lmao;
+    lmao.blk = a;
+    return lmao.bytes[n];
+}
 
 inline constexpr u8 clamp_u8(int x) {
     return std::clamp(x,0,255);
+}
+inline constexpr u16 clamp_u16(int x) {
+    return std::clamp(x,0,0xffff);
 }
 

@@ -19,8 +19,7 @@ enum CPColorType {
 
 // The layout of this struct is optimized for SIMD, do not touch.
 typedef struct {
-    uint8_t weight;
-    uint8_t _pad;
+    uint16_t weight;
     uint8_t u,v; // With +128 bias
     uint8_t ytl,ytr,ybl,ybr;
 } CPYuvBlock;
@@ -41,7 +40,7 @@ extern void CP_rgb2yuv_fast(CPYuvBlock *dst, const uint8_t* src, unsigned blockW
 extern void CP_rgb2yuv_hq(CPYuvBlock *dst, const uint8_t* src, unsigned blockWidth, unsigned blockHeight);
 extern void CP_yuv2gray(uint8_t* dst, const CPYuvBlock *src, unsigned blockWidth, unsigned blockHeight);
 extern void CP_gray2yuv(CPYuvBlock *dst, const uint8_t* src, unsigned blockWidth, unsigned blockHeight);
-extern void CP_yuv_downscale_fast(CPYuvBlock *dst, const CPYuvBlock* src, unsigned blockWidth, unsigned blockHeight);
+extern void CP_yuv_downscale_fast(CPYuvBlock *dst, const CPYuvBlock* src, unsigned blockWidth, unsigned blockHeight,unsigned extra_stride);
 
 // From encoder.cpp
 extern CPEncoderState *CP_create_encoder(unsigned frame_width, unsigned frame_height, unsigned max_strips);

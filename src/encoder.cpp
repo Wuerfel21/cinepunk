@@ -92,7 +92,7 @@ void CPEncoderState::doFrame(PacketWriter &packet) {
     }
 
     // Create low-res copy of frame for V1 encoding
-    CP_yuv_downscale_fast(cur_frame_v1.get(),cur_frame.get(),frame_mbWidth,frame_mbHeight);
+    CP_yuv_downscale_fast(cur_frame_v1.get(),cur_frame.get(),frame_mbWidth,frame_mbHeight,0);
 
     auto strip = tryStrip(0,frame_mbHeight,keyframe);
     writeStrip(packet,strip);
@@ -123,8 +123,10 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
         v4_idx.push_back(i*4+2);
         v4_idx.push_back(i*4+3);
     }
-    vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,strip.blk_v4);
-    vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,strip.mb_v1);
+    vq_fastpnn(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,&strip.blk_v4);
+    vq_fastpnn(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,&strip.mb_v1);
+    vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,&strip.blk_v4);
+    vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,&strip.mb_v1);
 
     v4_idx.clear();
     v1_idx.clear();
@@ -140,6 +142,7 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
                               + blockDistortion(cur_frame[blk_index(x*2+1,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+0)]])
                               + blockDistortion(cur_frame[blk_index(x*2+0,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+1)]])
                               + blockDistortion(cur_frame[blk_index(x*2+1,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+1)]]);
+            
             if (v1_distortion <= v4_distortion) {
                 strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V1;
                 v1_idx.push_back(mb_index(x,y));
@@ -156,15 +159,15 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
     if (v4_idx.empty()) {
         strip.code_v4.clear();
     } else {
-        vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,strip.blk_v4);
+        vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,&strip.blk_v4);
     }
     if (v1_idx.empty()) {
         strip.code_v1.clear();
     } else {
-        vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,strip.mb_v1);
+        vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,&strip.mb_v1);
     }
 
-    #if 1
+    #if 0
         uint histogram[256] = {};
         u64 distortion_total[256] = {};
         for (uint i=0;i<total_blocks();i++) {
@@ -172,14 +175,10 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
             histogram[code]++;
             distortion_total[code] += blockDistortion(cur_frame[i],strip.code_v4[code]);
         }
-        printf("usage: ");
-        for (uint i=0;i<256;i++) printf("%u,",histogram[i]);
-        printf("\n");
-        printf("distortion: ");
-        for (uint i=0;i<256;i++) printf("%llu,",distortion_total[i]);
         printf("\n");
         for(uint i=0;i<strip.code_v4.size();i++) {
-            if (histogram[i]== 0) printf("dead code %3u\n",i);
+            auto code = strip.code_v4[i];
+            printf("U: %3u V: %3u Y: %3u %3u %3u %3u D: %8llu H: %8u %s\n",code.u,code.v,code.ytl,code.ytr,code.ybl,code.ybr,distortion_total[i],histogram[i],histogram[i]==0?"DEAD!!!":"");
         }
 
     #endif
