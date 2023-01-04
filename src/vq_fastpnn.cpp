@@ -114,6 +114,8 @@ struct KDnode {
         CPYuvBlock *leaf_data;
     };
     inline bool is_leaf() {return axis_or_fill < 0;};
+    // Default non-constructor
+    KDnode() : axis_or_fill{0},lower{nullptr},upper{nullptr} {};
     // leaf constructor
     KDnode(CPYuvBlock *leaf_data,uint fill) : axis_or_fill{int8_t(-int(fill))},leaf_data{leaf_data} {};
     // branch constructor
@@ -147,28 +149,35 @@ struct KDnode {
 
 };
 
-static std::pair<KDnode *,uint> build_kdtree(CPYuvBlock *begin, CPYuvBlock *end) {
+// Tuple returned is leaf and vector counts
+static std::pair<uint,uint> build_kdtree(CPYuvBlock *begin, CPYuvBlock *end, KDnode *emplace) {
 
     uint count = end-begin;
+    assert(count > 0);
     if (count <= LEAF_SIZE) {
-        assert(count > 0);
-        return {new KDnode(begin,count),1};
+        new(emplace) KDnode(begin,count);
+        return {1,count};
     } else {
         uint median_idx = std::distance(begin,end) / 2;
         auto [axis,extent] = max_extent(begin,end);
-        if (extent == 0 && 0) {
+        if (extent == 0 && false) {
             // Can squash entire thing
+            // But TODO this actually results in worse everything, so don't
             u16 total_weight = 0;
-            for (auto blk=begin;begin!=end;begin++) {
+            for (auto blk=begin;blk!=end;blk++) {
                 total_weight = clamp_u16(total_weight+blk->weight);
             }
             begin->weight = total_weight;
-            return {new KDnode(begin,1),1};
+            new(emplace) KDnode(begin,1);
+            return {1,1};
         } else {
             auto pivot = quickselect(begin,end,median_idx,[axis](CPYuvBlock *block){return block_byte(*block,axis);});
-            auto lower = build_kdtree(begin,pivot);
-            auto upper = build_kdtree(pivot,end);
-            return {new KDnode(lower.first,upper.first,block_byte(*pivot,axis),axis), lower.second+upper.second};
+            auto lower_node = (KDnode*)::operator new(sizeof(KDnode));
+            auto lower = build_kdtree(begin,pivot,lower_node);
+            auto upper_node = (KDnode*)::operator new(sizeof(KDnode));
+            auto upper = build_kdtree(pivot,end,upper_node);
+            new(emplace) KDnode(lower_node,upper_node,block_byte(*pivot,axis),axis);
+            return {lower.first+upper.first,lower.second+upper.second};
         }
     }    
 }
@@ -209,17 +218,26 @@ static uint rebalance_kdtree(KDnode *node) {
         delete node->lower;
         delete node->upper;
         node->leaf_data = leaf_data;
+        return lower_size+upper_size;
     } else if (lower_size > REBLANCE_RATIO*upper_size || upper_size > REBLANCE_RATIO*lower_size) {
         auto lowest_lower = node->lower;
         while (!lowest_lower->is_leaf()) lowest_lower = lowest_lower->lower;
-        auto end = tree_flatten(lowest_lower->leaf_data,node);
-        auto [tmpnode,_] = build_kdtree(lowest_lower->leaf_data,end);
-        *node = std::move(*tmpnode);
-        delete tmpnode;
+        auto data = lowest_lower->leaf_data;
+        auto end = tree_flatten(data,node);
+        node->~KDnode(); // Manually destroy so we can emplace new node over same memory
+        auto [leaves,vectors] = build_kdtree(data,end,node);
         //printf("Node Rebuilt!\n");
         //printf("Should rebuild node, but shit's busted %u %u\n",lower_size,upper_size);
+        return vectors;
+    } else {
+        return lower_size+upper_size;
     }
-    return lower_size+upper_size;
+}
+
+[[maybe_unused]]
+static uint count_leaves(KDnode *node) {
+    if (node->is_leaf()) return 1;
+    else return count_leaves(node->lower) + count_leaves(node->upper);
 }
 
 struct MergeInfo {
@@ -308,19 +326,22 @@ u64 CPEncoderState::vq_fastpnn(std::vector<CPYuvBlock> &codebook,uint target_cod
         *end++ = data[idx];
     }
 
-    auto kd_build_result = build_kdtree(vectors.get(),end);
-    std::unique_ptr<KDnode> kd_root(kd_build_result.first);
-    auto kd_leaves = kd_build_result.second;
-    u32 vector_count = end - vectors.get();
-    auto merges = std::make_unique<MergeInfo[]>(kd_leaves);
+    KDnode kd_root;
+    auto kd_build_result = build_kdtree(vectors.get(),end,&kd_root);
+    auto kd_leaves = kd_build_result.first;
+    u32 vector_count = kd_build_result.second;
+    vector_count = rebalance_kdtree(&kd_root);
+    const uint mergelist_size = kd_leaves+kd_leaves/2; // Sometimes rebalancing grows the tree
+    auto merges = std::make_unique<MergeInfo[]>(mergelist_size);
     printf("Tree built! %u leaves %u vectors\n",kd_leaves,vector_count);
 
     u64 approx_distortion = 0;
 
-    if (vector_count > target_codebook_size) for(;;) {
-        auto merge_end = gen_merges(kd_root.get(),merges.get());
+    while (vector_count > target_codebook_size) {
+        printf("Leaf count: %u\n",count_leaves(&kd_root));
+        auto merge_end = gen_merges(&kd_root,merges.get());
         uint merge_count = merge_end - merges.get();
-        assert(merge_count <= kd_leaves);
+        assert(merge_count <= mergelist_size);
         assert(merge_count > 0);
         if (vector_count-merge_count/2 < target_codebook_size) {
             // Final iteration, need to fully sort candidates
@@ -336,13 +357,13 @@ u64 CPEncoderState::vq_fastpnn(std::vector<CPYuvBlock> &codebook,uint target_cod
             approx_distortion += merge_ptr->distortion;
             if (--vector_count == target_codebook_size) goto done;
         }
-        //printf("Merge iterated! %u vectors\n",vector_count);
-        rebalance_kdtree(kd_root.get());
-        //printf("Rebalance iterated!\n");
+        printf("Merge iterated! %u vectors\n",vector_count);
+        vector_count = rebalance_kdtree(&kd_root);
+        printf("Rebalance iterated!\n");
     }
     done:
-    codebook.resize(target_codebook_size);
-    tree_flatten(codebook.data(),kd_root.get());
+    codebook.resize(vector_count);
+    tree_flatten(codebook.data(),&kd_root);
 
     if (closest_out) {
         std::vector<std::vector<uint>> partition(codebook.size());

@@ -94,8 +94,14 @@ void CPEncoderState::doFrame(PacketWriter &packet) {
     // Create low-res copy of frame for V1 encoding
     CP_yuv_downscale_fast(cur_frame_v1.get(),cur_frame.get(),frame_mbWidth,frame_mbHeight,0);
 
-    auto strip = tryStrip(0,frame_mbHeight,keyframe);
-    writeStrip(packet,strip);
+    uint strips = max_strips;
+    uint y1 = 0;
+    for (uint i=0;i<strips;i++) {
+        auto height = std::min(frame_mbHeight/strips,frame_mbHeight-y1);
+        auto strip = tryStrip(y1,height,keyframe);
+        writeStrip(packet,strip);
+        y1+=height;
+    }
     
     
     uint framesize = packet.ptr - frame_header.ptr;
@@ -103,7 +109,23 @@ void CPEncoderState::doFrame(PacketWriter &packet) {
     frame_header.write_u24(framesize);
     frame_header.write_u16(frame_mbWidth*4);
     frame_header.write_u16(frame_mbHeight*4);
-    frame_header.write_u16(1); // TODO strip count
+    frame_header.write_u16(strips);
+
+}
+
+[[maybe_unused]]
+static void printCBInfo(const std::vector<CPYuvBlock> codebook,const u8 *indices,const CPYuvBlock *frame,uint blocknum) {
+        uint histogram[256] = {};
+        u64 distortion_total[256] = {};
+        for (uint i=0;i<blocknum;i++) {
+            auto code = indices[i];
+            histogram[code]++;
+            distortion_total[code] += blockDistortion(frame[i],codebook[code]);
+        }
+        for(uint i=0;i<codebook.size();i++) {
+            auto code = codebook[i];
+            printf("U: %3u V: %3u Y: %3u %3u %3u %3u D: %8llu H: %8u %s\n",code.u,code.v,code.ytl,code.ytr,code.ybl,code.ybr,distortion_total[i],histogram[i],histogram[i]==0?"DEAD!!!":"");
+        }
 
 }
 
@@ -112,10 +134,14 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
     CPEncoderState::StripEncoding strip(frame_mbWidth*height);
     strip.ytop = ytop;
     strip.height = height;
+    uint strip_macroblocks = height*frame_mbWidth;
+
+    auto image_v4 = cur_frame.get()+blk_index(0,ytop*2);
+    auto image_v1 = cur_frame_v1.get()+mb_index(0,ytop);
 
     std::vector<uint> v4_idx,v1_idx;
     strip.strip_type = CPEncoderState::StripEncoding::MB_V4; // TODO select dynamic
-    for (uint i=0;i<total_macroblocks();i++) {
+    for (uint i=0;i<strip_macroblocks;i++) {
         strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V4;
         v1_idx.push_back(i);
         v4_idx.push_back(i*4+0);
@@ -123,25 +149,25 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
         v4_idx.push_back(i*4+2);
         v4_idx.push_back(i*4+3);
     }
-    vq_fastpnn(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,&strip.blk_v4);
-    vq_fastpnn(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,&strip.mb_v1);
-    vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,&strip.blk_v4);
-    vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,&strip.mb_v1);
+    vq_fastpnn(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
+    vq_fastpnn(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
+    vq_elbg(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
+    vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
 
     v4_idx.clear();
     v1_idx.clear();
-    for (uint y=0;y<frame_mbHeight;y++) {
+    for (uint y=0;y<height;y++) {
         for (uint x=0;x<frame_mbWidth;x++) {
             u32 v1_distortion = macroblockV1Distortion(
-                cur_frame[blk_index(x*2+0,y*2+0)],
-                cur_frame[blk_index(x*2+1,y*2+0)],
-                cur_frame[blk_index(x*2+0,y*2+1)],
-                cur_frame[blk_index(x*2+1,y*2+1)],
+                image_v4[blk_index(x*2+0,y*2+0)],
+                image_v4[blk_index(x*2+1,y*2+0)],
+                image_v4[blk_index(x*2+0,y*2+1)],
+                image_v4[blk_index(x*2+1,y*2+1)],
                 strip.code_v1[strip.mb_v1[mb_index(x,y)]]);
-            u32 v4_distortion = blockDistortion(cur_frame[blk_index(x*2+0,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+0)]])
-                              + blockDistortion(cur_frame[blk_index(x*2+1,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+0)]])
-                              + blockDistortion(cur_frame[blk_index(x*2+0,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+1)]])
-                              + blockDistortion(cur_frame[blk_index(x*2+1,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+1)]]);
+            u32 v4_distortion = blockDistortion(image_v4[blk_index(x*2+0,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+0)]])
+                              + blockDistortion(image_v4[blk_index(x*2+1,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+0)]])
+                              + blockDistortion(image_v4[blk_index(x*2+0,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+1)]])
+                              + blockDistortion(image_v4[blk_index(x*2+1,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+1)]]);
             
             if (v1_distortion <= v4_distortion) {
                 strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V1;
@@ -159,28 +185,20 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
     if (v4_idx.empty()) {
         strip.code_v4.clear();
     } else {
-        vq_elbg(strip.code_v4,256,cur_frame.get()+blk_index(0,ytop*2),v4_idx,&strip.blk_v4);
+        vq_elbg(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
     }
     if (v1_idx.empty()) {
         strip.code_v1.clear();
     } else {
-        vq_elbg(strip.code_v1,256,cur_frame_v1.get()+mb_index(0,ytop),v1_idx,&strip.mb_v1);
+        vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
     }
 
-    #if 0
-        uint histogram[256] = {};
-        u64 distortion_total[256] = {};
-        for (uint i=0;i<total_blocks();i++) {
-            auto code = strip.blk_v4[i];
-            histogram[code]++;
-            distortion_total[code] += blockDistortion(cur_frame[i],strip.code_v4[code]);
-        }
-        printf("\n");
-        for(uint i=0;i<strip.code_v4.size();i++) {
-            auto code = strip.code_v4[i];
-            printf("U: %3u V: %3u Y: %3u %3u %3u %3u D: %8llu H: %8u %s\n",code.u,code.v,code.ytl,code.ytr,code.ybl,code.ybr,distortion_total[i],histogram[i],histogram[i]==0?"DEAD!!!":"");
-        }
-
+    #if 1
+    printf("V4 info:\n");
+    printCBInfo(strip.code_v4,strip.blk_v4.data(),image_v4,strip_macroblocks*4);
+    printf("\nV1 info:\n");
+    printCBInfo(strip.code_v4,strip.mb_v1.data(),image_v1,strip_macroblocks);
+    printf("\n");
     #endif
 
 
@@ -246,6 +264,6 @@ void CPEncoderState::writeStrip(PacketWriter &packet,StripEncoding &strip) {
     strip_header.write_u24(stripsize);
     strip_header.write_u16(strip.ytop*4);
     strip_header.write_u16(0);
-    strip_header.write_u16(strip.height*4);
+    strip_header.write_u16((strip.ytop+strip.height)*4);
     strip_header.write_u16(frame_mbWidth*4);
 }

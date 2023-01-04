@@ -33,24 +33,47 @@ void test_still(std::string basename) {
     CP_yuv2rgb(out_buffer.data(),yuv_buffer2.data(),width/4,height/4);
     lodepng::encode(basename+"_downscale.png",out_buffer,width/4*2,height/4*2,LCT_RGB);
 
-    std::vector<uint8_t> cinep_buffer(CP_BUFFER_SIZE(width,height,1));
-    auto encoder = CP_create_encoder(width,height,1);
-    CP_push_frame(encoder,CP_YUVBLOCK,yuv_buffer.data());
-    CP_push_frame(encoder,CP_YUVBLOCK,nullptr);
-    auto cinep_size = CP_pull_frame(encoder,cinep_buffer.data());
-    cinep_buffer.resize(cinep_size);
-    CP_destroy_encoder(encoder);
-    lodepng::save_file(cinep_buffer,basename+"_bad.cinep");
+    {
+        std::vector<uint8_t> cinep_buffer(CP_BUFFER_SIZE(width,height,1));
+        auto encoder = CP_create_encoder(width,height,1);
+        CP_push_frame(encoder,CP_YUVBLOCK,yuv_buffer.data());
+        CP_push_frame(encoder,CP_YUVBLOCK,nullptr);
+        auto cinep_size = CP_pull_frame(encoder,cinep_buffer.data());
+        cinep_buffer.resize(cinep_size);
+        CP_destroy_encoder(encoder);
+        lodepng::save_file(cinep_buffer,basename+"_bad.cinep");
 
-    auto decoder = CP_create_decoder(width,height);
-    CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
-    CP_destroy_decoder(decoder);
-    lodepng::encode(basename+"_bad.cinep.png",out_buffer,width,height,LCT_RGB);
-    decoder = CP_create_decoder(width,height);
-    CP_set_decoder_debug(decoder,CP_DECDEBUG_CRYPTOMATTE);
-    CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
-    CP_destroy_decoder(decoder);
-    lodepng::encode(basename+"_bad_cryptomatte.cinep.png",out_buffer,width,height,LCT_RGB);
+        
+        auto decoder = CP_create_decoder(width,height);
+        CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
+        CP_destroy_decoder(decoder);
+        lodepng::encode(basename+"_bad.cinep.png",out_buffer,width,height,LCT_RGB);
+        decoder = CP_create_decoder(width,height);
+        CP_set_decoder_debug(decoder,CP_DECDEBUG_CRYPTOMATTE);
+        CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
+        CP_destroy_decoder(decoder);
+        lodepng::encode(basename+"_bad_cryptomatte.cinep.png",out_buffer,width,height,LCT_RGB);
+    }
+    {
+        std::vector<uint8_t> cinep_buffer(CP_BUFFER_SIZE(width,height,3));
+        auto encoder = CP_create_encoder(width,height,3);
+        CP_push_frame(encoder,CP_YUVBLOCK,yuv_buffer.data());
+        CP_push_frame(encoder,CP_YUVBLOCK,nullptr);
+        auto cinep_size = CP_pull_frame(encoder,cinep_buffer.data());
+        cinep_buffer.resize(cinep_size);
+        CP_destroy_encoder(encoder);
+        lodepng::save_file(cinep_buffer,basename+"_3strip.cinep");
+
+        auto decoder = CP_create_decoder(width,height);
+        CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
+        CP_destroy_decoder(decoder);
+        lodepng::encode(basename+"_3strip.cinep.png",out_buffer,width,height,LCT_RGB);
+        decoder = CP_create_decoder(width,height);
+        CP_set_decoder_debug(decoder,CP_DECDEBUG_CRYPTOMATTE);
+        CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
+        CP_destroy_decoder(decoder);
+        lodepng::encode(basename+"_3strip_cryptomatte.cinep.png",out_buffer,width,height,LCT_RGB);
+    }
     
 
 }
@@ -64,6 +87,9 @@ int main(int argc, char **argv) {
     lodepng::load_file(cinep_buffer,"test/fufu_ffmpeg.cinep");
     CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
     lodepng::encode("test/fufu_ffmpeg.cinep.png",out_buffer,640,480,LCT_RGB);
+    CP_set_decoder_debug(decoder,CP_DECDEBUG_CRYPTOMATTE);
+    CP_decode_frame(decoder,cinep_buffer.data(),cinep_buffer.size(),CP_RGB24,out_buffer.data());
+    lodepng::encode("test/fufu_ffmpeg_cryptomatte.cinep.png",out_buffer,640,480,LCT_RGB);
     CP_destroy_decoder(decoder);
 
 
@@ -74,5 +100,6 @@ int main(int argc, char **argv) {
     test_still("test/fufu");
     test_still("test/junko");
     test_still("test/pigge");
+    test_still("test/ok_i_guess");
 }
 

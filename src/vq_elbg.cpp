@@ -3,7 +3,7 @@
 
 constexpr uint lbg_iterations = 2;
 constexpr uint split_iterations = 3;
-constexpr uint soca_iterations = 2;
+constexpr uint soca_iterations = 3;
 constexpr uint soca_search_len_lower = 256;
 //constexpr uint soca_search_len_upper = 16;
 constexpr uint soca_sort_len = 32;
@@ -364,10 +364,10 @@ u64 CPEncoderState::vq_elbg(std::vector<CPYuvBlock> &codebook,uint target_codebo
         u64 total_distortion = voronoi_partition(codebook,data,applicable_indices,code_distortion,partition);
 
         // ELBG special sauce!
-        if (codebook.size() >= 8 && iteration_left > 0 && 0) {
+        if (codebook.size() >= 8 && iteration_left > 0) {
             u64 mean_distortion = total_distortion/codebook.size();
             u8 distortion_rank[256];
-            u64 shift_max_dist = 0;//iteration_left < 2 ? mean_distortion/8 : mean_distortion;
+            u64 shift_max_dist = 0;
             std::iota(distortion_rank,distortion_rank+codebook.size(),0);
             std::sort(distortion_rank,distortion_rank+codebook.size(),[&](u8 i, u8 j){
                 return code_distortion[i] < code_distortion[j];
