@@ -226,8 +226,8 @@ static uint rebalance_kdtree(KDnode *node) {
         auto end = tree_flatten(data,node);
         node->~KDnode(); // Manually destroy so we can emplace new node over same memory
         auto [leaves,vectors] = build_kdtree(data,end,node);
-        //printf("Node Rebuilt!\n");
-        //printf("Should rebuild node, but shit's busted %u %u\n",lower_size,upper_size);
+        //fprintf(stderr,"Node Rebuilt!\n");
+        //fprintf(stderr,"Should rebuild node, but shit's busted %u %u\n",lower_size,upper_size);
         return vectors;
     } else {
         return lower_size+upper_size;
@@ -333,12 +333,12 @@ u64 CPEncoderState::vq_fastpnn(std::vector<CPYuvBlock> &codebook,uint target_cod
     vector_count = rebalance_kdtree(&kd_root);
     const uint mergelist_size = kd_leaves+kd_leaves/2; // Sometimes rebalancing grows the tree
     auto merges = std::make_unique<MergeInfo[]>(mergelist_size);
-    printf("Tree built! %u leaves %u vectors\n",kd_leaves,vector_count);
+    //fprintf(stderr,"Tree built! %u leaves %u vectors\n",kd_leaves,vector_count);
 
     u64 approx_distortion = 0;
 
     while (vector_count > target_codebook_size) {
-        printf("Leaf count: %u\n",count_leaves(&kd_root));
+        //fprintf(stderr,"Leaf count: %u\n",count_leaves(&kd_root));
         auto merge_end = gen_merges(&kd_root,merges.get());
         uint merge_count = merge_end - merges.get();
         assert(merge_count <= mergelist_size);
@@ -357,9 +357,9 @@ u64 CPEncoderState::vq_fastpnn(std::vector<CPYuvBlock> &codebook,uint target_cod
             approx_distortion += merge_ptr->distortion;
             if (--vector_count == target_codebook_size) goto done;
         }
-        printf("Merge iterated! %u vectors\n",vector_count);
+        //fprintf(stderr,"Merge iterated! %u vectors\n",vector_count);
         vector_count = rebalance_kdtree(&kd_root);
-        printf("Rebalance iterated!\n");
+        //fprintf(stderr,"Rebalance iterated!\n");
     }
     done:
     codebook.resize(vector_count);

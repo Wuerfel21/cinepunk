@@ -138,6 +138,8 @@ struct CPDecoderState {
     uint mb_index(uint x,uint y) {return x+y*frame_mbWidth*1;}
     uint blk_index(uint x,uint y) {return x+y*frame_mbWidth*2;}
 
+    void do_decode(const uint8_t *data,size_t data_size);
+
     CPDecoderState(uint frame_width,uint frame_height);
 };
 
@@ -145,10 +147,11 @@ struct CPEncoderState {
 
     const uint frame_mbWidth,frame_mbHeight,max_strips;
     uint32_t encoder_flags = 0;
-    std::unique_ptr<CPYuvBlock[]> prev_frame;
     std::unique_ptr<CPYuvBlock[]> cur_frame;
     std::unique_ptr<CPYuvBlock[]> cur_frame_v1;
     std::unique_ptr<CPYuvBlock[]> next_frame;
+    std::unique_ptr<u32[]> skip_mb_distortion;
+    CPDecoderState decode_state;
     std::vector<std::array<CPYuvBlock,256>> prev_codes_v4;
     std::vector<std::array<CPYuvBlock,256>> prev_codes_v1;
     uint64_t frame_count = 0;

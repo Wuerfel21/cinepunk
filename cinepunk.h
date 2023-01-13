@@ -45,12 +45,14 @@ extern void CP_yuv_downscale_fast(CPYuvBlock *dst, const CPYuvBlock* src, unsign
 // From encoder.cpp
 extern CPEncoderState *CP_create_encoder(unsigned frame_width, unsigned frame_height, unsigned max_strips);
 extern void CP_destroy_encoder(CPEncoderState *enc);
+extern size_t CP_get_buffer_size(CPEncoderState *enc);
 extern void CP_set_encflags(CPEncoderState *enc,uint32_t flags);
 extern void CP_clear_encflags(CPEncoderState *enc,uint32_t flags);
 extern bool CP_push_frame(CPEncoderState *enc,CPColorType ctype,const void *data);
 extern size_t CP_pull_frame(CPEncoderState *enc,uint8_t *buffer);
 
 // From decoder.cpp
+extern bool CP_peek_dimensions(uint8_t *data, size_t data_size, unsigned *widthOut, unsigned *heightOut, size_t *sizeOut);
 extern CPDecoderState *CP_create_decoder(unsigned frame_width, unsigned frame_height);
 extern void CP_destroy_decoder(CPDecoderState *dec);
 extern void CP_set_decoder_debug(CPDecoderState *dec,uint32_t flags);

@@ -1,4 +1,19 @@
 #include "cinepunk_internal.hpp"
+#include <cstdio>
+
+CP_API bool CP_peek_dimensions(uint8_t *data, size_t data_size, unsigned *widthOut, unsigned *heightOut, size_t *sizeOut) {
+    if (data_size < 8) return false;
+    PacketReader packet(data);
+    u8 frame_type = packet.read_u8();
+    if (frame_type != CHUNK_FRAME_INTER && frame_type != CHUNK_FRAME_INTRA) return false;
+    size_t frame_size = packet.read_u24();
+    unsigned width = packet.read_u16();
+    unsigned height = packet.read_u16();
+    if (sizeOut) *sizeOut = frame_size;
+    if (widthOut) *widthOut = width;
+    if (heightOut) *heightOut = height;
+    return true;
+}
 
 CPDecoderState::CPDecoderState(unsigned frame_width, unsigned frame_height)
 : frame_mbWidth{frame_width/4},frame_mbHeight{frame_height/4} {
@@ -39,7 +54,7 @@ static CPYuvBlock bullshit_code_v1(u8 i) {
     };
 }
 
-CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_size,CPColorType ctype,void *frameOut) {
+void CPDecoderState::do_decode(const uint8_t *data,size_t data_size) {
     assert(data_size >= 16);
     PacketReader packet(data);
     u8 frame_type = packet.read_u8();
@@ -47,13 +62,13 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
     size_t frame_size = packet.read_u24();
     assert(frame_size == data_size);
     uint frame_width = packet.read_u16();
-    assert(dec->frame_mbWidth*4 == frame_width);
+    assert(frame_mbWidth*4 == frame_width);
     uint frame_height = packet.read_u16();
-    assert(dec->frame_mbHeight*4 == frame_height);
+    assert(frame_mbHeight*4 == frame_height);
     uint strip_count = packet.read_u16();
 
-    if (dec->codes_v1.size() < strip_count) dec->codes_v1.resize(strip_count);
-    if (dec->codes_v4.size() < strip_count) dec->codes_v4.resize(strip_count);
+    if (codes_v1.size() < strip_count) codes_v1.resize(strip_count);
+    if (codes_v4.size() < strip_count) codes_v4.resize(strip_count);
 
     uint prev_ybottom = 0;
 
@@ -68,8 +83,8 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
         uint ybottom = packet.read_u16();
         uint xend = packet.read_u16();
         assert(xstart < xend);
-        assert(xstart < dec->frame_mbWidth*4);
-        assert(xend <= dec->frame_mbWidth*4);
+        assert(xstart < frame_mbWidth*4);
+        assert(xend <= frame_mbWidth*4);
         assert(xstart%4 == 0);
         assert(xend%4 == 0);
         if (ytop == 0) {
@@ -78,8 +93,8 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
         }
         prev_ybottom = ybottom;
         assert(ytop < ybottom);
-        assert(ytop < dec->frame_mbHeight*4);
-        assert(ybottom <= dec->frame_mbHeight*4);
+        assert(ytop < frame_mbHeight*4);
+        assert(ybottom <= frame_mbHeight*4);
         assert(ytop%4 == 0);
         assert(ybottom%4 == 0);
 
@@ -98,7 +113,7 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
             case CHUNK_V1_MONO_PARTIAL :
                 // Codebook chunks...
             {
-                auto &codebook = (chunk_type&CB_V1_MASK ? dec->codes_v1 : dec->codes_v4)[stripno];
+                auto &codebook = (chunk_type&CB_V1_MASK ? codes_v1 : codes_v4)[stripno];
                 uint i = 0;
                 BitstreamReader bitstream(packet);
                 while (chunk_begin+chunk_size > packet.ptr) {
@@ -125,38 +140,38 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
                 BitstreamReader bitstream(packet);
                 for (uint y=ytop/4;y<ybottom/4;y++) {
                     for (uint x=xstart/4;x<xend/4;x++) {
-                        if (chunk_type != CHUNK_FRAME_INTRA || bitstream.read_bit()) {
+                        if (chunk_type != CHUNK_IMAGE_INTER || bitstream.read_bit()) {
                             // Not skipped
                             if (chunk_type == CHUNK_IMAGE_V1 || !bitstream.read_bit()) {
                                 // V1 code
-                                auto code = (dec->debug_flags & CP_DECDEBUG_CRYPTOMATTE)
+                                auto code = (debug_flags & CP_DECDEBUG_CRYPTOMATTE)
                                     ? bullshit_code_v1(bitstream.read_u8())
-                                    : dec->codes_v1[stripno][bitstream.read_u8()];
-                                dec->frame[dec->blk_index(x*2+0,y*2+0)] = {
+                                    : codes_v1[stripno][bitstream.read_u8()];
+                                frame[blk_index(x*2+0,y*2+0)] = {
                                     .u = code.u,.v = code.v,.ytl = code.ytl,.ytr = code.ytl,.ybl = code.ytl,.ybr = code.ytl
                                 };
-                                dec->frame[dec->blk_index(x*2+1,y*2+0)] = {
+                                frame[blk_index(x*2+1,y*2+0)] = {
                                     .u = code.u,.v = code.v,.ytl = code.ytr,.ytr = code.ytr,.ybl = code.ytr,.ybr = code.ytr,
                                 };
-                                dec->frame[dec->blk_index(x*2+0,y*2+1)] = {
+                                frame[blk_index(x*2+0,y*2+1)] = {
                                     .u = code.u,.v = code.v,.ytl = code.ybl,.ytr = code.ybl,.ybl = code.ybl,.ybr = code.ybl,
                                 };
-                                dec->frame[dec->blk_index(x*2+1,y*2+1)] = {
+                                frame[blk_index(x*2+1,y*2+1)] = {
                                     .u = code.u,.v = code.v,.ytl = code.ybr,.ytr = code.ybr,.ybl = code.ybr,.ybr = code.ybr,
                                 };
                             } else {
                                 
                                 // V4 codes
-                                if (dec->debug_flags & CP_DECDEBUG_CRYPTOMATTE) {
-                                    dec->frame[dec->blk_index(x*2+0,y*2+0)] = bullshit_code_v4(bitstream.read_u8());
-                                    dec->frame[dec->blk_index(x*2+1,y*2+0)] = bullshit_code_v4(bitstream.read_u8());
-                                    dec->frame[dec->blk_index(x*2+0,y*2+1)] = bullshit_code_v4(bitstream.read_u8());
-                                    dec->frame[dec->blk_index(x*2+1,y*2+1)] = bullshit_code_v4(bitstream.read_u8());
+                                if (debug_flags & CP_DECDEBUG_CRYPTOMATTE) {
+                                    frame[blk_index(x*2+0,y*2+0)] = bullshit_code_v4(bitstream.read_u8());
+                                    frame[blk_index(x*2+1,y*2+0)] = bullshit_code_v4(bitstream.read_u8());
+                                    frame[blk_index(x*2+0,y*2+1)] = bullshit_code_v4(bitstream.read_u8());
+                                    frame[blk_index(x*2+1,y*2+1)] = bullshit_code_v4(bitstream.read_u8());
                                 } else {
-                                    dec->frame[dec->blk_index(x*2+0,y*2+0)] = dec->codes_v4[stripno][bitstream.read_u8()];
-                                    dec->frame[dec->blk_index(x*2+1,y*2+0)] = dec->codes_v4[stripno][bitstream.read_u8()];
-                                    dec->frame[dec->blk_index(x*2+0,y*2+1)] = dec->codes_v4[stripno][bitstream.read_u8()];
-                                    dec->frame[dec->blk_index(x*2+1,y*2+1)] = dec->codes_v4[stripno][bitstream.read_u8()];
+                                    frame[blk_index(x*2+0,y*2+0)] = codes_v4[stripno][bitstream.read_u8()];
+                                    frame[blk_index(x*2+1,y*2+0)] = codes_v4[stripno][bitstream.read_u8()];
+                                    frame[blk_index(x*2+0,y*2+1)] = codes_v4[stripno][bitstream.read_u8()];
+                                    frame[blk_index(x*2+1,y*2+1)] = codes_v4[stripno][bitstream.read_u8()];
                                 }
                             }
                         } else {
@@ -167,11 +182,17 @@ CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_
                 }
             } break;
             default:
+                fprintf(stderr,"Bad chunk type %08X\n",chunk_type);
                 assert(false);
                 break;
             }
         }
     }
+}
+
+CP_API void CP_decode_frame(CPDecoderState *dec,const uint8_t *data,size_t data_size,CPColorType ctype,void *frameOut) {
+
+    dec->do_decode(data,data_size);    
 
     switch (ctype) {
     case CP_RGB24:

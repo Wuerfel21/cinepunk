@@ -275,12 +275,12 @@ static std::array<CPYuvBlock,2>  __attribute__((noinline)) bbox_distrib(const CP
 
 static bool  __attribute__((noinline)) try_shift(std::vector<CPYuvBlock> &codebook, const CPYuvBlock *data, uint from, uint to, u64 *code_distortion, std::vector<std::vector<uint>> &partition) {
 
-    //printf("try_shift\n");
+    //fprintf(stderr,"try_shift\n");
     if (code_distortion[from] > code_distortion[to]) return false;
 
     auto target_distortion = code_distortion[from] + code_distortion[to];
 
-    //printf("SoCA %3u %3u\n",from,to);
+    //fprintf(stderr,"SoCA %3u %3u\n",from,to);
 
     // Find codeword to replace from with
     uint replace = 0;
@@ -302,6 +302,7 @@ static bool  __attribute__((noinline)) try_shift(std::vector<CPYuvBlock> &codebo
     for (uint idx : replace_partition) {
         from_distortion += blockDistortion(new_replace,data[idx])*data[idx].weight;
     }
+    // TODO: Maybe subtract distortion prior to merge?
 
     // Possible early out (TODO profile)
     if (from_distortion > target_distortion) return false;
@@ -329,7 +330,7 @@ static bool  __attribute__((noinline)) try_shift(std::vector<CPYuvBlock> &codebo
 
     if (to_distortion + from_distortion > target_distortion) return false;
 
-    printf("SoCA OK! %llu %llu %llu\n",to_distortion,from_distortion,target_distortion);
+    //fprintf(stderr,"SoCA OK! %llu %llu %llu\n",to_distortion,from_distortion,target_distortion);
     // actually do shift
     partition[replace].insert(partition[replace].end(),partition[from].begin(),partition[from].end());
     partition[from] = std::move(adjust_partition[0]);

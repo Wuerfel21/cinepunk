@@ -2,7 +2,7 @@
 #include <cstdio>
 
 CPEncoderState::CPEncoderState(unsigned frame_width, unsigned frame_height, unsigned max_strips)
-: frame_mbWidth{frame_width/4},frame_mbHeight{frame_height/4},max_strips{max_strips} {
+: frame_mbWidth{frame_width/4},frame_mbHeight{frame_height/4},max_strips{max_strips},decode_state{frame_width,frame_height} {
     // Set defaults
 
     assert(frame_width%4 == 0 && frame_height%4 == 0);
@@ -11,8 +11,8 @@ CPEncoderState::CPEncoderState(unsigned frame_width, unsigned frame_height, unsi
     frame_count = 0;
     next_frame = std::make_unique<CPYuvBlock[]>(total_blocks());
     cur_frame  = std::make_unique<CPYuvBlock[]>(total_blocks());
-    prev_frame = std::make_unique<CPYuvBlock[]>(total_blocks());
     cur_frame_v1 = std::make_unique<CPYuvBlock[]>(total_macroblocks());
+    skip_mb_distortion = std::make_unique<u32[]>(total_macroblocks());
     prev_codes_v4.resize(max_strips);
     prev_codes_v1.resize(max_strips);
 }
@@ -24,6 +24,10 @@ CP_API CPEncoderState *CP_create_encoder(unsigned frame_width, unsigned frame_he
 
 CP_API void CP_destroy_encoder(CPEncoderState *enc) {
     delete enc;
+}
+
+CP_API size_t CP_get_buffer_size(CPEncoderState *enc) {
+    return CP_BUFFER_SIZE(enc->frame_mbWidth*4,enc->frame_mbHeight*4,enc->max_strips);
 }
 
 CP_API void CP_set_encflags(CPEncoderState *enc,uint32_t flags) {
@@ -80,16 +84,40 @@ CP_API size_t CP_pull_frame(CPEncoderState *enc,uint8_t *buffer) {
 void CPEncoderState::doFrame(PacketWriter &packet) {
 
     auto frame_header = packet;
+    auto frame_begin = packet.ptr;
     packet.skip(10);
     
-    bool keyframe = (inter_frames_left == 0);
-
-    // Assign block weights based on change in lookahead frame
-    for(uint i=0;i<total_blocks();i++) {
-        //uint distortion = blockDistortion(cur_frame[i],next_frame[i]);
-        // TODO: Tune threshold
-        cur_frame[i].weight = 3;//(distortion < 16) ? 3 : 2;
+    bool keyframe = false;
+    if (inter_frames_left == 0 || frame_count == 0) {
+        inter_frames_left = 60;
+        keyframe = true;
+    } else {
+        inter_frames_left--;
     }
+
+    // Compute bidirectional differences
+    for (uint y=0;y<frame_mbHeight;y++) {
+        for (uint x=0;x<frame_mbWidth;x++) {
+            u32 forward = blockDistortion(cur_frame[blk_index(x*2+0,y*2+0)],next_frame[blk_index(x*2+0,y*2+0)])
+                        + blockDistortion(cur_frame[blk_index(x*2+1,y*2+0)],next_frame[blk_index(x*2+1,y*2+0)])
+                        + blockDistortion(cur_frame[blk_index(x*2+0,y*2+1)],next_frame[blk_index(x*2+0,y*2+1)])
+                        + blockDistortion(cur_frame[blk_index(x*2+1,y*2+1)],next_frame[blk_index(x*2+1,y*2+1)]);
+            u32 backward = keyframe ? UINT32_MAX 
+                         : blockDistortion(cur_frame[blk_index(x*2+0,y*2+0)],decode_state.frame[blk_index(x*2+0,y*2+0)])
+                         + blockDistortion(cur_frame[blk_index(x*2+1,y*2+0)],decode_state.frame[blk_index(x*2+1,y*2+0)])
+                         + blockDistortion(cur_frame[blk_index(x*2+0,y*2+1)],decode_state.frame[blk_index(x*2+0,y*2+1)])
+                         + blockDistortion(cur_frame[blk_index(x*2+1,y*2+1)],decode_state.frame[blk_index(x*2+1,y*2+1)]);
+            
+            skip_mb_distortion[mb_index(x,y)] =  backward;
+            // TODO: Tune threshold
+            // TODO: Re-enable
+            u16 weight = 2;//forward < 16 ? 3 : 2;
+            cur_frame[blk_index(x*2+0,y*2+0)].weight = weight;
+            cur_frame[blk_index(x*2+1,y*2+0)].weight = weight;
+            cur_frame[blk_index(x*2+0,y*2+1)].weight = weight;
+            cur_frame[blk_index(x*2+1,y*2+1)].weight = weight;
+        }
+    } 
 
     // Create low-res copy of frame for V1 encoding
     CP_yuv_downscale_fast(cur_frame_v1.get(),cur_frame.get(),frame_mbWidth,frame_mbHeight,0);
@@ -111,6 +139,9 @@ void CPEncoderState::doFrame(PacketWriter &packet) {
     frame_header.write_u16(frame_mbHeight*4);
     frame_header.write_u16(strips);
 
+    // Decode packet back into buffer
+    decode_state.do_decode(frame_begin,packet.ptr - frame_begin);
+    frame_count++;
 }
 
 [[maybe_unused]]
@@ -124,7 +155,7 @@ static void printCBInfo(const std::vector<CPYuvBlock> codebook,const u8 *indices
         }
         for(uint i=0;i<codebook.size();i++) {
             auto code = codebook[i];
-            printf("U: %3u V: %3u Y: %3u %3u %3u %3u D: %8llu H: %8u %s\n",code.u,code.v,code.ytl,code.ytr,code.ybl,code.ybr,distortion_total[i],histogram[i],histogram[i]==0?"DEAD!!!":"");
+            fprintf(stderr,"U: %3u V: %3u Y: %3u %3u %3u %3u D: %8llu H: %8u %s\n",code.u,code.v,code.ytl,code.ytr,code.ybl,code.ybr,distortion_total[i],histogram[i],histogram[i]==0?"DEAD!!!":"");
         }
 
 }
@@ -140,48 +171,61 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
     auto image_v1 = cur_frame_v1.get()+mb_index(0,ytop);
 
     std::vector<uint> v4_idx,v1_idx;
-    strip.strip_type = CPEncoderState::StripEncoding::MB_V4; // TODO select dynamic
+    strip.strip_type = keyframe ? CPEncoderState::StripEncoding::MB_V4 : CPEncoderState::StripEncoding::MB_SKIP; // TODO select dynamic
     for (uint i=0;i<strip_macroblocks;i++) {
         strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V4;
-        v1_idx.push_back(i);
-        v4_idx.push_back(i*4+0);
-        v4_idx.push_back(i*4+1);
-        v4_idx.push_back(i*4+2);
-        v4_idx.push_back(i*4+3);
+        if (skip_mb_distortion[ytop*frame_mbWidth+i]!=0 || true) {
+            // Funny optimization wherein we ignore unchanged macroblocks
+            // TODO disabled because it destroys quality
+            v1_idx.push_back(i);
+            v4_idx.push_back(i*4+0);
+            v4_idx.push_back(i*4+1);
+            v4_idx.push_back(i*4+2);
+            v4_idx.push_back(i*4+3);
+        }
     }
-    vq_fastpnn(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
-    vq_fastpnn(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
-    vq_elbg(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
-    vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
+    if (v1_idx.empty() && v4_idx.empty()) {
+        // Special case for fully unchanged frame
+        for (uint i=0;i<strip_macroblocks;i++) strip.mb_types[i] = CPEncoderState::StripEncoding::MB_SKIP;
+    } else {
+        vq_fastpnn(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
+        vq_fastpnn(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
+        vq_elbg(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
+        vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
 
-    v4_idx.clear();
-    v1_idx.clear();
-    for (uint y=0;y<height;y++) {
-        for (uint x=0;x<frame_mbWidth;x++) {
-            u32 v1_distortion = macroblockV1Distortion(
-                image_v4[blk_index(x*2+0,y*2+0)],
-                image_v4[blk_index(x*2+1,y*2+0)],
-                image_v4[blk_index(x*2+0,y*2+1)],
-                image_v4[blk_index(x*2+1,y*2+1)],
-                strip.code_v1[strip.mb_v1[mb_index(x,y)]]);
-            u32 v4_distortion = blockDistortion(image_v4[blk_index(x*2+0,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+0)]])
-                              + blockDistortion(image_v4[blk_index(x*2+1,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+0)]])
-                              + blockDistortion(image_v4[blk_index(x*2+0,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+1)]])
-                              + blockDistortion(image_v4[blk_index(x*2+1,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+1)]]);
-            
-            if (v1_distortion <= v4_distortion) {
-                strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V1;
-                v1_idx.push_back(mb_index(x,y));
-            } else {
-                strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V4;
-                v4_idx.push_back(blk_index(x*2+0,y*2+0));
-                v4_idx.push_back(blk_index(x*2+1,y*2+0));
-                v4_idx.push_back(blk_index(x*2+0,y*2+1));
-                v4_idx.push_back(blk_index(x*2+1,y*2+1));
+        v4_idx.clear();
+        v1_idx.clear();
+        for (uint y=0;y<height;y++) {
+            for (uint x=0;x<frame_mbWidth;x++) {
+                u32 v1_distortion = macroblockV1Distortion(
+                    image_v4[blk_index(x*2+0,y*2+0)],
+                    image_v4[blk_index(x*2+1,y*2+0)],
+                    image_v4[blk_index(x*2+0,y*2+1)],
+                    image_v4[blk_index(x*2+1,y*2+1)],
+                    strip.code_v1[strip.mb_v1[mb_index(x,y)]]);
+                u32 v4_distortion = blockDistortion(image_v4[blk_index(x*2+0,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+0)]])
+                                + blockDistortion(image_v4[blk_index(x*2+1,y*2+0)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+0)]])
+                                + blockDistortion(image_v4[blk_index(x*2+0,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+0,y*2+1)]])
+                                + blockDistortion(image_v4[blk_index(x*2+1,y*2+1)],strip.code_v4[strip.blk_v4[blk_index(x*2+1,y*2+1)]]);
+                
+                u32 skip_distortion = skip_mb_distortion[mb_index(x,ytop+y)];
+
+                if (!keyframe && skip_distortion <= v4_distortion && skip_distortion <= v1_distortion) {
+                    strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_SKIP;
+                } else if (v1_distortion <= v4_distortion+0*TOTAL_WEIGHT) {
+                    strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V1;
+                    v1_idx.push_back(mb_index(x,y));
+                } else {
+                    strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V4;
+                    v4_idx.push_back(blk_index(x*2+0,y*2+0));
+                    v4_idx.push_back(blk_index(x*2+1,y*2+0));
+                    v4_idx.push_back(blk_index(x*2+0,y*2+1));
+                    v4_idx.push_back(blk_index(x*2+1,y*2+1));
+                }
             }
         }
     }
-    printf("V1: %u, V4 : %u\n",uint(v1_idx.size()),uint(v4_idx.size()/4));
+    fprintf(stderr,"V1: %u, V4 : %u, SKIP: %u, %s\n",uint(v1_idx.size()),uint(v4_idx.size()/4),uint(strip_macroblocks-(v1_idx.size()+v4_idx.size()/4)),keyframe ? "KEY" : "");
     if (v4_idx.empty()) {
         strip.code_v4.clear();
     } else {
@@ -193,12 +237,12 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
         vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
     }
 
-    #if 1
-    printf("V4 info:\n");
+    #if 0
+    fprintf(stderr,"V4 info:\n");
     printCBInfo(strip.code_v4,strip.blk_v4.data(),image_v4,strip_macroblocks*4);
-    printf("\nV1 info:\n");
+    fprintf(stderr,"\nV1 info:\n");
     printCBInfo(strip.code_v4,strip.mb_v1.data(),image_v1,strip_macroblocks);
-    printf("\n");
+    fprintf(stderr,"\n");
     #endif
 
 
@@ -238,15 +282,22 @@ void CPEncoderState::writeStrip(PacketWriter &packet,StripEncoding &strip) {
         for(uint x=0;x<frame_mbWidth;x++) {
             switch (strip.mb_types[mb_index(x,y)]) {
             case CPEncoderState::StripEncoding::MB_V1:
-                bitstream.put_bit(false);
+                if (strip.strip_type >= CPEncoderState::StripEncoding::MB_SKIP) bitstream.put_bit(true);
+                if (strip.strip_type >= CPEncoderState::StripEncoding::MB_V4) bitstream.put_bit(false);
                 bitstream.write_u8(strip.mb_v1[mb_index(x,y)]);
                 break;
             case CPEncoderState::StripEncoding::MB_V4:
+                if (strip.strip_type >= CPEncoderState::StripEncoding::MB_SKIP) bitstream.put_bit(true);
+                assert(strip.strip_type >= CPEncoderState::StripEncoding::MB_V4);
                 bitstream.put_bit(true);
                 bitstream.write_u8(strip.blk_v4[blk_index(x*2+0,y*2+0)]);
                 bitstream.write_u8(strip.blk_v4[blk_index(x*2+1,y*2+0)]);
                 bitstream.write_u8(strip.blk_v4[blk_index(x*2+0,y*2+1)]);
                 bitstream.write_u8(strip.blk_v4[blk_index(x*2+1,y*2+1)]);
+                break;
+            case CPEncoderState::StripEncoding::MB_SKIP:
+                assert(strip.strip_type >= CPEncoderState::StripEncoding::MB_SKIP);
+                bitstream.put_bit(false);
                 break;
             default:
                 assert(false);
@@ -256,11 +307,12 @@ void CPEncoderState::writeStrip(PacketWriter &packet,StripEncoding &strip) {
     }
     bitstream.flush();
     uint imgsize = packet.ptr - image_header.ptr;
-    image_header.write_u8(CHUNK_IMAGE_INTRA);
+    image_header.write_u8(strip.strip_type >= CPEncoderState::StripEncoding::MB_SKIP ? CHUNK_IMAGE_INTER :
+        (strip.strip_type >= CPEncoderState::StripEncoding::MB_V4 ? CHUNK_IMAGE_INTRA : CHUNK_IMAGE_V1));
     image_header.write_u24(imgsize);
 
     uint stripsize = packet.ptr - strip_header.ptr;
-    strip_header.write_u8(CHUNK_STRIP_INTRA);
+    strip_header.write_u8(strip.strip_type >= CPEncoderState::StripEncoding::MB_SKIP ? CHUNK_STRIP_INTER : CHUNK_STRIP_INTRA);
     strip_header.write_u24(stripsize);
     strip_header.write_u16(strip.ytop*4);
     strip_header.write_u16(0);
