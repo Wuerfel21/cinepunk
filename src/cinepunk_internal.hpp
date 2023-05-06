@@ -69,7 +69,7 @@ struct BitstreamWriter {
         buffer.push_back(x);
     }
     inline void flush() {
-        packet.write_u32(bit_buffer<<(32-bit_fill));
+        if (bit_fill) packet.write_u32(bit_buffer<<(32-bit_fill));
         packet.write_data(buffer.data(),buffer.size());
         buffer.clear();
         bit_fill = 0;
@@ -147,6 +147,7 @@ struct CPEncoderState {
 
     const uint frame_mbWidth,frame_mbHeight,max_strips;
     uint32_t encoder_flags = 0;
+    uint32_t quality_factor = 0;
     std::unique_ptr<CPYuvBlock[]> cur_frame;
     std::unique_ptr<CPYuvBlock[]> cur_frame_v1;
     std::unique_ptr<CPYuvBlock[]> next_frame;
@@ -162,12 +163,13 @@ struct CPEncoderState {
     uint total_blocks() {return total_macroblocks()*4;}
     uint mb_index(uint x,uint y) {return x+y*frame_mbWidth*1;}
     uint blk_index(uint x,uint y) {return x+y*frame_mbWidth*2;}
+    bool use_threads() {return !(encoder_flags & CP_ENCFLAG_NO_THREADS);}
 
     CPEncoderState(uint frame_width,uint frame_height, uint max_strips);
 
     struct StripEncoding {
         enum MBEncType : u8 {
-            MB_UNDECIDED,MB_V1,MB_V4,MB_SKIP
+            MB_UNDECIDED,MB_V1,MB_V4,MB_SKIP,MB_SKIP_ELSE_V1
         };
         MBEncType strip_type;
         uint ytop,height;
@@ -183,6 +185,7 @@ struct CPEncoderState {
             blk_v4.resize(size*4);
             // Codebooks are left empty
         }
+        StripEncoding() {};
     };
 
     // In encoder.cpp
@@ -233,6 +236,8 @@ constexpr u8 CHUNK_IMAGE_V1    = 0x32;
 inline u32 square(int x) {
     return x*x;
 }
+
+constexpr uint QUALITY_SCALE = 16;
 
 constexpr uint Y_WEIGHT =   1;
 constexpr uint U_WEIGHT =   2;

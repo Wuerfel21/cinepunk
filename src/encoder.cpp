@@ -1,5 +1,7 @@
 #include "cinepunk_internal.hpp"
 #include <cstdio>
+#include <thread>
+#include <optional>
 
 CPEncoderState::CPEncoderState(unsigned frame_width, unsigned frame_height, unsigned max_strips)
 : frame_mbWidth{frame_width/4},frame_mbHeight{frame_height/4},max_strips{max_strips},decode_state{frame_width,frame_height} {
@@ -36,6 +38,10 @@ CP_API void CP_set_encflags(CPEncoderState *enc,uint32_t flags) {
 
 CP_API void CP_clear_encflags(CPEncoderState *enc,uint32_t flags) {
     enc->encoder_flags &= ~flags;
+}
+
+CP_API void CP_set_quality(CPEncoderState *enc,uint32_t factor) {
+    enc->quality_factor = factor;
 }
 
 CP_API bool CP_push_frame(CPEncoderState *enc,CPColorType ctype,const void *data) {
@@ -124,11 +130,21 @@ void CPEncoderState::doFrame(PacketWriter &packet) {
 
     uint strips = max_strips;
     uint y1 = 0;
+    auto strip_buffer = std::make_unique<StripEncoding[]>(strips);
+    std::vector<std::thread> strip_threads;
     for (uint i=0;i<strips;i++) {
         auto height = std::min(frame_mbHeight/strips,frame_mbHeight-y1);
-        auto strip = tryStrip(y1,height,keyframe);
-        writeStrip(packet,strip);
+        auto strip_fun = [=,&strip_buffer](){
+            strip_buffer[i] = tryStrip(y1,height,keyframe);
+        };
+        if (use_threads()) strip_threads.emplace_back(strip_fun);
+        else strip_fun();
         y1+=height;
+    }
+
+    for (uint i=0;i<strips;i++) {
+        if (i<strip_threads.size()) strip_threads[i].join();
+        writeStrip(packet,strip_buffer[i]);
     }
     
     
@@ -171,10 +187,12 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
     auto image_v1 = cur_frame_v1.get()+mb_index(0,ytop);
 
     std::vector<uint> v4_idx,v1_idx;
-    strip.strip_type = keyframe ? CPEncoderState::StripEncoding::MB_V4 : CPEncoderState::StripEncoding::MB_SKIP; // TODO select dynamic
+    bool frame_skip = !keyframe;
     for (uint i=0;i<strip_macroblocks;i++) {
         strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V4;
-        if (skip_mb_distortion[ytop*frame_mbWidth+i]!=0 || true) {
+        auto skip_dist = skip_mb_distortion[ytop*frame_mbWidth+i];
+        if (skip_dist>0) frame_skip = false;
+        if (skip_dist>0 || keyframe || true) {
             // Funny optimization wherein we ignore unchanged macroblocks
             // TODO disabled because it destroys quality
             v1_idx.push_back(i);
@@ -184,17 +202,34 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
             v4_idx.push_back(i*4+3);
         }
     }
-    if (v1_idx.empty() && v4_idx.empty()) {
+    if (frame_skip) {
         // Special case for fully unchanged frame
+        strip.strip_type = CPEncoderState::StripEncoding::MB_SKIP;
         for (uint i=0;i<strip_macroblocks;i++) strip.mb_types[i] = CPEncoderState::StripEncoding::MB_SKIP;
+        v1_idx.clear();
+        v4_idx.clear();
     } else {
+        auto v1_proc = [&](){
+            vq_fastpnn(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
+            vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
+        };
+        std::optional<std::thread> v1_thread;
+        if (use_threads()) v1_thread = std::thread(v1_proc);
+        else v1_proc();
         vq_fastpnn(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
-        vq_fastpnn(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
         vq_elbg(strip.code_v4,256,image_v4,v4_idx,&strip.blk_v4);
-        vq_elbg(strip.code_v1,256,image_v1,v1_idx,&strip.mb_v1);
+        if (v1_thread) v1_thread.value().join();
 
         v4_idx.clear();
         v1_idx.clear();
+        // Like in weird card games, lower score is better
+        u64 v1only_score_total = 0, intra_score_total = 0, inter_score_total = 0;
+        u32 v1only_cost = 8*TOTAL_WEIGHT*quality_factor;
+        u32 intra_v1_cost = 9*TOTAL_WEIGHT*quality_factor;
+        u32 intra_v4_cost = 33*TOTAL_WEIGHT*quality_factor;
+        u32 inter_v1_cost = 10*TOTAL_WEIGHT*quality_factor;
+        u32 inter_v4_cost = 34*TOTAL_WEIGHT*quality_factor;
+        u32 inter_skip_cost = 1*TOTAL_WEIGHT*quality_factor;
         for (uint y=0;y<height;y++) {
             for (uint x=0;x<frame_mbWidth;x++) {
                 u32 v1_distortion = macroblockV1Distortion(
@@ -210,17 +245,69 @@ CPEncoderState::tryStrip(uint ytop, uint height, bool keyframe) {
                 
                 u32 skip_distortion = skip_mb_distortion[mb_index(x,ytop+y)];
 
-                if (!keyframe && skip_distortion <= v4_distortion && skip_distortion <= v1_distortion) {
-                    strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_SKIP;
-                } else if (v1_distortion <= v4_distortion+0*TOTAL_WEIGHT) {
+                u32 v1only_score =       v1_distortion*QUALITY_SCALE + v1only_cost;
+                u32 intra_v1_score =     v1_distortion*QUALITY_SCALE + intra_v1_cost;
+                u32 intra_v4_score =     v4_distortion*QUALITY_SCALE + intra_v4_cost;
+                u32 inter_v1_score =     v1_distortion*QUALITY_SCALE + inter_v1_cost;
+                u32 inter_v4_score =     v4_distortion*QUALITY_SCALE + inter_v4_cost;
+                u32 inter_skip_score = skip_distortion*QUALITY_SCALE + inter_skip_cost;
+
+                if (!keyframe && inter_skip_score <= inter_v4_score && inter_skip_score <= inter_v1_score) {
+                    if (inter_v1_score <= inter_v4_score) {
+                        strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_SKIP_ELSE_V1;
+                        intra_score_total += intra_v1_score;
+                    } else {
+                        strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_SKIP;
+                        intra_score_total += intra_v4_score;
+                    }
+                    inter_score_total += inter_skip_score;
+                } else if (inter_v1_score <= inter_v4_score) {
                     strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V1;
                     v1_idx.push_back(mb_index(x,y));
+                    intra_score_total += intra_v1_score;
+                    inter_score_total += inter_v1_score;
                 } else {
                     strip.mb_types[mb_index(x,y)] = CPEncoderState::StripEncoding::MB_V4;
                     v4_idx.push_back(blk_index(x*2+0,y*2+0));
                     v4_idx.push_back(blk_index(x*2+1,y*2+0));
                     v4_idx.push_back(blk_index(x*2+0,y*2+1));
                     v4_idx.push_back(blk_index(x*2+1,y*2+1));
+                    intra_score_total += intra_v4_score;
+                    inter_score_total += inter_v4_score;
+                }
+                v1only_score_total += v1only_score;
+            }
+        }
+        // Evalutate scores
+        if (v1only_score_total <= inter_score_total && (keyframe || v1only_score_total <= intra_score_total)) {
+            // Convert to V1 only
+            strip.strip_type = CPEncoderState::StripEncoding::MB_V1;
+            v4_idx.clear();
+            for (uint i=0;i<strip_macroblocks;i++) {
+                if (strip.mb_types[i] != CPEncoderState::StripEncoding::MB_V1) {
+                    strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V1;
+                    v1_idx.push_back(i);
+                }
+            }
+        } else if (inter_score_total < intra_score_total && !keyframe) {
+            // Use inter coding
+            strip.strip_type = CPEncoderState::StripEncoding::MB_SKIP;
+        } else {
+            // Convert to intra coding
+            strip.strip_type = CPEncoderState::StripEncoding::MB_V4;
+            if (!keyframe) {
+                // Keyframe already doesn't have inter coding
+                for (uint i=0;i<strip_macroblocks;i++) {
+                    if (strip.mb_types[i] == CPEncoderState::StripEncoding::MB_SKIP_ELSE_V1) {
+                        strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V1;
+                        v1_idx.push_back(i);
+                    } else if (strip.mb_types[i] == CPEncoderState::StripEncoding::MB_SKIP) {
+                        strip.mb_types[i] = CPEncoderState::StripEncoding::MB_V4;
+                        v4_idx.push_back(i*4);
+                        v4_idx.push_back(i*4+1);
+                        v4_idx.push_back(i*4+frame_mbWidth*2);
+                        v4_idx.push_back(i*4+frame_mbWidth*2+1);
+                    }
                 }
             }
         }
@@ -296,6 +383,7 @@ void CPEncoderState::writeStrip(PacketWriter &packet,StripEncoding &strip) {
                 bitstream.write_u8(strip.blk_v4[blk_index(x*2+1,y*2+1)]);
                 break;
             case CPEncoderState::StripEncoding::MB_SKIP:
+            case CPEncoderState::StripEncoding::MB_SKIP_ELSE_V1:
                 assert(strip.strip_type >= CPEncoderState::StripEncoding::MB_SKIP);
                 bitstream.put_bit(false);
                 break;

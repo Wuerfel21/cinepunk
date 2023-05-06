@@ -28,6 +28,7 @@ struct CPEncoderState;
 struct CPDecoderState;
 
 #define CP_ENCFLAG_RGB2YUV_FAST (1U<<0) // Use fast RGB->YUV conversion instead of high-quality
+#define CP_ENCFLAG_NO_THREADS   (1U<<1) // Don't use threads for speedup
 
 #define CP_DECDEBUG_CRYPTOMATTE (1U<<0)
 
@@ -48,6 +49,7 @@ extern void CP_destroy_encoder(CPEncoderState *enc);
 extern size_t CP_get_buffer_size(CPEncoderState *enc);
 extern void CP_set_encflags(CPEncoderState *enc,uint32_t flags);
 extern void CP_clear_encflags(CPEncoderState *enc,uint32_t flags);
+extern void CP_set_quality(CPEncoderState *enc,uint32_t factor);
 extern bool CP_push_frame(CPEncoderState *enc,CPColorType ctype,const void *data);
 extern size_t CP_pull_frame(CPEncoderState *enc,uint8_t *buffer);
 

@@ -132,6 +132,7 @@ void CPDecoderState::do_decode(const uint8_t *data,size_t data_size) {
                     }
                     i++;
                 }
+                assert(chunk_begin+chunk_size == packet.ptr);
             } break;
             case CHUNK_IMAGE_INTRA:
             case CHUNK_IMAGE_INTER:
@@ -177,9 +178,9 @@ void CPDecoderState::do_decode(const uint8_t *data,size_t data_size) {
                         } else {
                             // Do nothing
                         }
-                        assert(chunk_begin+chunk_size >= packet.ptr);
                     }
                 }
+                assert(chunk_begin+chunk_size == packet.ptr);
             } break;
             default:
                 fprintf(stderr,"Bad chunk type %08X\n",chunk_type);

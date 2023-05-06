@@ -96,25 +96,31 @@ static inline constexpr int clamp_y(int x) {
     return std::clamp(x,0,Y_MAX);
 }
 
-static inline constexpr float srgb2lin(int i) {
+static inline float srgb2lin(int i) {
     float f = i/float(Y_MAX);
     return (f>0.04045f ? powf((f+0.055f)/1.055f,2.4f) : f/12.92f);
 }
-static inline constexpr int lin2srgb(float f) {
+static const auto srgb2lin_tab = []{
+    std::array<float,Y_MAX+1> arr{};
+    for (int i=0;i<=Y_MAX;i++) arr[i] = srgb2lin(i);
+    return arr;
+}();
+
+static inline int lin2srgb(float f) {
     return std::clamp((int)roundf((f>0.0031308f ? powf(f,1.0f/2.4f)*1.055f-0.055f : f*12.92f)*Y_MAX),0,Y_MAX);
 }
 
 // Gamma-correct luma value
 // The visually correct formula really depends on monitor calibration...
 static inline float srgb2lingrey(int r, int g, int b) {
-    return srgb2lin(r)*0.2126f + srgb2lin(g)*0.7152f + srgb2lin(b)*0.0722f;
-    //return srgb2lin(r)*0.299f + srgb2lin(g)*0.587f + srgb2lin(b)*0.144f;
-    //return srgb2lin(r)*0.2627f + srgb2lin(g)*0.6780f + srgb2lin(b)*0.0593f;
+    return srgb2lin_tab[r]*0.2126f + srgb2lin_tab[g]*0.7152f + srgb2lin_tab[b]*0.0722f;
+    //return srgb2lin_tab[r]*0.299f + srgb2lin_tab[g]*0.587f + srgb2lin_tab[b]*0.144f;
+    //return srgb2lin_tab[r]*0.2627f + srgb2lin_tab[g]*0.6780f + srgb2lin_tab[b]*0.0593f;
 }
 
 // Gamma-correct average of four pixels
 static inline int srgb_avg(int a, int b, int c, int d) {
-    return lin2srgb((srgb2lin(a) + srgb2lin(b) + srgb2lin(c) + srgb2lin(d))/4);
+    return lin2srgb((srgb2lin_tab[a] + srgb2lin_tab[b] + srgb2lin_tab[c] + srgb2lin_tab[d])/4);
 }
 
 
@@ -150,7 +156,7 @@ CP_API void CP_rgb2yuv_hq(CPYuvBlock *dst, const uint8_t* src, unsigned blockWid
                 w_target[i] = srgb2lingrey(r[i],g[i],b[i]);
                 y[i] = (r[i]*yuv_matrix[0]+g[i]*yuv_matrix[1]+b[i]*yuv_matrix[2]+mat_round)>>mat_shift;
                 float cur_luma = srgb2lingrey(clamp_y(y[i]+rdiff),clamp_y(y[i]+gdiff),clamp_y(y[i]+bdiff));
-                y[i] = lin2srgb(srgb2lin(y[i])+w_target[i]-cur_luma);
+                y[i] = lin2srgb(srgb2lin_tab[y[i]]+w_target[i]-cur_luma);
             }
 
             block->ytl = clamp_u8((y[0]+Y_ROUND)>>Y_FIX);

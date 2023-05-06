@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
     auto mode = get_string(args);
     if (mode) fprintf(stderr,"mode: %s\n",mode.value().c_str());
     if (mode == "encstill" || mode == "encraw") {
-        unsigned width = 640, height = 480, max_strips = 3, rate = 30;
+        unsigned width = 640, height = 480, max_strips = 3, rate = 30, quality = 0;
         bool makeAvi = false;
         std::optional<std::string> infile,outfile;
         while (!args.empty()) {
@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
             if (arg == "-q") {
                 auto argval = get_string(args);
                 if (!argval) argFail(argv[0]);
-                fprintf(stderr,"Quality level NYI\n");
+                quality = std::stoi(argval.value());
             } else if (arg == "-strips") {
                 auto argval = get_string(args);
                 if (!argval) argFail(argv[0]);
@@ -154,6 +154,7 @@ int main(int argc, char **argv) {
                 exit(-1);
             }
             auto encoder = CP_create_encoder(width,height,max_strips); // TODO strip buffers
+            CP_set_quality(encoder,quality);
             std::vector<uint8_t> cinep_buffer(CP_get_buffer_size(encoder));
             CP_push_frame(encoder,CP_RGB24,rgb_buffer.data());
             CP_push_frame(encoder,CP_RGB24,nullptr);
@@ -191,6 +192,7 @@ int main(int argc, char **argv) {
             }
             SimpleAVIWriter avi(*output);
             auto encoder = CP_create_encoder(width,height,max_strips);
+            CP_set_quality(encoder,quality);
             std::vector<uint8_t> rgb_buffer(width*height*3);
             std::vector<uint8_t> cvid_buffer(CP_get_buffer_size(encoder));
             bool stream_end = false;
